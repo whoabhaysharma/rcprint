@@ -10,7 +10,8 @@
     "rewrites": [
       {
         "source": "/api/extractRcData",
-        "function": "extractRcData"
+        "function": "extractRc",
+        "region": "us-central1"
       },
       {
         "source": "**",

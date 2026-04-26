@@ -1,7 +1,16 @@
-const { onRequest } = require("firebase-functions/v2/https");
+const functions = require("firebase-functions");
 const { GoogleGenAI } = require("@google/genai");
 
-exports.extractRcData = onRequest({ cors: true }, async (req, res) => {
+exports.extractRc = functions.https.onRequest(async (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  if (req.method === 'OPTIONS') {
+    res.status(204).send('');
+    return;
+  }
+
   if (req.method !== "POST") {
     res.status(405).send("Method Not Allowed");
     return;
