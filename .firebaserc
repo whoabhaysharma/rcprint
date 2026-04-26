@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "gen-lang-client-0810421212"
+  },
+  "targets": {
+    "gen-lang-client-0810421212": {
+      "hosting": {
+        "vehicle-app": [
+          "vehicle-reg-form-app"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

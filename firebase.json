@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "target": "vehicle-app",
     "public": "dist",
     "ignore": [
       "firebase.json",
