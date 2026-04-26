@@ -1,0 +1,6 @@
+{
+  "name": "Vehicle Registration Form",
+  "description": "A mobile-friendly vehicle registration form that generates a structured PDF with a QR code.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
