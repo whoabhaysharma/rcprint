@@ -27,18 +27,24 @@ exports.extractRc = functions.https.onRequest(async (req, res) => {
     
     const prompt = `
       You are a highly accurate OCR and data extraction system for Vehicle Registration Certificates (RC).
-      Analyze the provided image and extract all relevant vehicle information.
+      Analyze the provided image and extract all relevant vehicle information for a pre-printed form.
       Return a JSON object with the following keys. If a value is missing, return an empty string.
+
       Keys:
-      regnNo, regnDate, manufacturer, fuel, vehicleClass, bodyType, chassisNo, engineNo, modelNo, regdOwner, swdOf, address, cubicCapacity, seatCapacity, standCapacity, wheelBase, unladenWt, noOfCyc, ownerSerial, taxPaidUpTo, regdValidity, colour, rlw, issuingAuthority, purpose, hypothecatedTo, manufacturingDt.
+      regnNo, regdOwner, swdOf, manufacturingDt, regnDate, regdValidity, 
+      colour, fuel, vehicleClass, bodyType, manufacturer, chassisNo, 
+      engineNo, modelNo, hypothecatedTo, unladenWt, cubicCapacity, 
+      wheelBase, rlw, seatCapacity, standCapacity, noOfCyc, ownerSerial, 
+      address, issuingAuthority, purpose.
       
       CRITICAL: 
       1. Return ONLY the JSON object. No other text.
-      2. Ensure dates are in DD-MM-YYYY format if possible.
-      3. Extract the Registration Number (e.g., HR26EB5601) accurately.
-      4. Extract the Owner details and Address accurately.
+      2. Dates: Use DD-MM-YYYY format.
+      3. Names: Extract EXACTLY as written.
+      4. Numbers: Extract Chassis/Engine numbers in full.
+      5. Manufacturing Date: often in format MM/YYYY (e.g. 10/2024).
 
-      Additional User Rules to follow strictly:
+      Additional Rules:
       ${customPrompt || "None"}
     `;
 
