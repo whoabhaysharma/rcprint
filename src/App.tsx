@@ -162,24 +162,7 @@ const extractFirstString = (source: Record<string, any>, keys: string[]): string
 
 const sanitizeExtractedValue = (value: unknown): string => {
   if (typeof value !== 'string') return '';
-  const text = value.trim();
-  if (!text) return '';
-  const upper = text.toUpperCase();
-  const blockedPhrases = [
-    'NO HYPOTHECATION DETAILS FOUND',
-    'NO DETAILS FOUND',
-    'NOT FOUND',
-    'N/A',
-    'NA',
-    'NONE',
-    'NULL',
-    'FALSE',
-    'UNAVAILABLE',
-    'NOT AVAILABLE',
-    'UNKNOWN',
-  ];
-  if (blockedPhrases.includes(upper)) return '';
-  return text;
+  return value.trim();
 };
 
 const findDateInText = (value: string): string => {
@@ -346,37 +329,18 @@ export default function App() {
 
     setIsExtracting(true);
     try {
-      let base64Image = '';
-
-      if (file.type === 'application/pdf') {
-        const arrayBuffer = await file.arrayBuffer();
-        const loadingTask = pdfjsLib.getDocument({
-          data: arrayBuffer,
-          useSystemFonts: true,
-          disableFontFace: true
-        });
-        const pdf = await loadingTask.promise;
-        const page = await pdf.getPage(1);
-        const viewport = page.getViewport({ scale: 2.5 });
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
-        if (!context) throw new Error('Could not create canvas context');
-        canvas.height = viewport.height;
-        canvas.width = viewport.width;
-        await page.render({ canvasContext: context, viewport, canvas }).promise;
-        base64Image = canvas.toDataURL('image/jpeg', 0.9).split(',')[1];
-      } else {
-        const reader = new FileReader();
-        base64Image = await new Promise((resolve) => {
-          reader.onload = () => resolve((reader.result as string).split(',')[1]);
-          reader.readAsDataURL(file);
-        });
-      }
+      const reader = new FileReader();
+      const dataUrl = await new Promise<string>((resolve) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.readAsDataURL(file);
+      });
+      const [meta, base64Data = ''] = dataUrl.split(',');
+      const mimeType = file.type || meta.match(/^data:(.*?);base64$/)?.[1] || 'application/octet-stream';
 
       const res = await fetch('/api/extractRcData', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ base64Image, customPrompt })
+        body: JSON.stringify({ base64Data, mimeType, customPrompt })
       });
 
       if (!res.ok) throw new Error('Failed to extract data: ' + await res.text());

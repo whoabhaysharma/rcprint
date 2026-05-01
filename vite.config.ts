@@ -22,12 +22,19 @@ export default defineConfig(({mode}) => {
             req.on('data', chunk => { body += chunk.toString(); });
             req.on('end', async () => {
               try {
-                const { base64Image, customPrompt } = JSON.parse(body);
+                const { base64Data, base64Image, mimeType, customPrompt } = JSON.parse(body);
                 const apiKey = env.GEMINI_API_KEY;
                 if (!apiKey) {
                   res.statusCode = 500;
                   res.setHeader('Content-Type', 'application/json');
                   return res.end(JSON.stringify({error: 'Missing GEMINI_API_KEY in .env.local'}));
+                }
+                const payloadData = base64Data || base64Image;
+                const payloadMimeType = mimeType || 'image/jpeg';
+                if (!payloadData) {
+                  res.statusCode = 400;
+                  res.setHeader('Content-Type', 'application/json');
+                  return res.end(JSON.stringify({error: 'Missing file payload for extraction'}));
                 }
 
                 // Dynamically import genai securely in Node.js server
@@ -51,6 +58,9 @@ export default defineConfig(({mode}) => {
                   7. If hypothecation details are not present, set hypothecatedTo to "".
                   8. On many RC PDFs, registration validity appears near labels like "Fitness valid upto" (sometimes OCR reads "Fitness valid updo"). Always map that date into regdValidity.
                   9. Extract every listed key from the document if present; do not skip fields.
+                  10. Do not return placeholder text for missing values. If not found, strictly return "".
+                  11. For numeric fields (cubicCapacity, seatCapacity, standCapacity, wheelBase, unladenWt, noOfCyc, rlw), return only numeric value without units like KG/MM/CC.
+                  12. For ownerSerial, return two-digit format with leading zero if needed (01, 02, ...).
 
                   Additional User Rules to follow strictly:
                   ${customPrompt || "None"}
@@ -61,7 +71,7 @@ export default defineConfig(({mode}) => {
                   ai.models.generateContent({
                     model: "gemini-2.5-flash",
                     contents: [
-                      { inlineData: { data: base64Image, mimeType: "image/jpeg" } },
+                      { inlineData: { data: payloadData, mimeType: payloadMimeType } },
                       { text: prompt }
                     ],
                     config: { responseMimeType: "application/json" }
