@@ -17,9 +17,12 @@ exports.extractRc = functions.https.onRequest(async (req, res) => {
   }
 
   try {
-    const { base64Image, customPrompt } = req.body;
-    if (!base64Image) {
-      res.status(400).send("Missing base64Image");
+    const { base64Data, base64Image, mimeType, customPrompt } = req.body || {};
+    const payloadData = base64Data || base64Image;
+    const payloadMimeType = mimeType || "image/jpeg";
+
+    if (!payloadData) {
+      res.status(400).send("Missing file payload");
       return;
     }
 
@@ -49,10 +52,10 @@ exports.extractRc = functions.https.onRequest(async (req, res) => {
     `;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.5-flash",
       contents: {
         parts: [
-          { inlineData: { data: base64Image, mimeType: "image/jpeg" } },
+          { inlineData: { data: payloadData, mimeType: payloadMimeType } },
           { text: prompt }
         ]
       },
