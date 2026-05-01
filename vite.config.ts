@@ -23,9 +23,16 @@ export default defineConfig(({mode}) => {
             req.on('end', async () => {
               try {
                 const { base64Image, customPrompt } = JSON.parse(body);
+                const apiKey = env.GEMINI_API_KEY;
+                if (!apiKey) {
+                  res.statusCode = 500;
+                  res.setHeader('Content-Type', 'application/json');
+                  return res.end(JSON.stringify({error: 'Missing GEMINI_API_KEY in .env.local'}));
+                }
+
                 // Dynamically import genai securely in Node.js server
                 const { GoogleGenAI } = await import('@google/genai');
-                const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
+                const ai = new GoogleGenAI({ apiKey });
                 
                 const prompt = `
                   You are a highly accurate OCR and data extraction system for Vehicle Registration Certificates (RC).
@@ -39,26 +46,39 @@ export default defineConfig(({mode}) => {
                   2. Ensure dates are in DD-MM-YYYY format if possible.
                   3. Extract the Registration Number (e.g., HR26EB5601) accurately.
                   4. Extract the Owner details and Address accurately.
+                  5. If any detail is missing, return "" (empty string) only. Never return placeholder text like "NO HYPOTHECATION DETAILS FOUND", "NOT FOUND", "N/A", "FALSE", or "NULL".
+                  6. Extract registration expiry/validity very carefully into regdValidity (examples: "26-11-2039", "Valid Upto 26-11-2039").
+                  7. If hypothecation details are not present, set hypothecatedTo to "".
+                  8. On many RC PDFs, registration validity appears near labels like "Fitness valid upto" (sometimes OCR reads "Fitness valid updo"). Always map that date into regdValidity.
+                  9. Extract every listed key from the document if present; do not skip fields.
 
                   Additional User Rules to follow strictly:
                   ${customPrompt || "None"}
                 `;
 
-                const response = await ai.models.generateContent({
-                  model: "gemini-3-flash-preview",
-                  contents: [
-                    { inlineData: { data: base64Image, mimeType: "image/jpeg" } },
-                    { text: prompt }
-                  ],
-                  config: { responseMimeType: "application/json" }
-                });
+                const timeoutMs = 25000;
+                const response = await Promise.race([
+                  ai.models.generateContent({
+                    model: "gemini-2.5-flash",
+                    contents: [
+                      { inlineData: { data: base64Image, mimeType: "image/jpeg" } },
+                      { text: prompt }
+                    ],
+                    config: { responseMimeType: "application/json" }
+                  }),
+                  new Promise((_, reject) => {
+                    setTimeout(() => reject(new Error(`Gemini request timed out after ${timeoutMs}ms`)), timeoutMs);
+                  })
+                ]) as { text: string };
 
                 res.setHeader('Content-Type', 'application/json');
                 res.end(response.text);
               } catch (err: any) {
-                console.error(err);
+                const message = err?.message || 'Unknown extraction error';
+                console.error('extractRcData error:', message);
                 res.statusCode = 500;
-                res.end(err.message);
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({error: message}));
               }
             });
           });

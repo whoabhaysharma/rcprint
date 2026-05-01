@@ -55,6 +55,36 @@ interface FormData {
   manufacturingDt: string;
 }
 
+const FORM_KEYS: Array<keyof FormData> = [
+  'regnNo',
+  'regnDate',
+  'manufacturer',
+  'fuel',
+  'vehicleClass',
+  'bodyType',
+  'chassisNo',
+  'engineNo',
+  'modelNo',
+  'regdOwner',
+  'swdOf',
+  'address',
+  'cubicCapacity',
+  'seatCapacity',
+  'standCapacity',
+  'wheelBase',
+  'unladenWt',
+  'noOfCyc',
+  'ownerSerial',
+  'taxPaidUpTo',
+  'regdValidity',
+  'colour',
+  'rlw',
+  'issuingAuthority',
+  'purpose',
+  'hypothecatedTo',
+  'manufacturingDt',
+];
+
 const initialData: FormData = {
   regnNo: 'HR79E1420',
   regnDate: '27-11-2024',
@@ -88,6 +118,178 @@ const initialData: FormData = {
 type AppMode = 'manual' | 'auto';
 type AppView = 'mode-selection' | 'form' | 'preview' | 'success';
 
+const CARD_WIDTH_MM = 85.6;
+const CARD_HEIGHT_MM = 53.98;
+const CARD_ASPECT = CARD_WIDTH_MM / CARD_HEIGHT_MM;
+const CARD_MOCKUP_URL = 'https://file60.b-cdn.net/card-mockup.png';
+const LAYOUT_STORAGE_KEY = 'rc_calibration_layout';
+const TEMPLATE_STORAGE_KEY = 'rc_global_template_layout';
+const DEFAULT_TEMPLATE_LAYOUT: Record<string, Partial<{ x: number; y: number; w: number; h: number; fontSize: number; bold: boolean }>> = {
+  regnNo: { x: 0.5537, y: 0.0421, w: 0.8292, h: 0.1301, fontSize: 5 },
+  regdOwner: { x: 0.5523, y: 0.1265, fontSize: 5 },
+  swdOf: { x: 0.5513, y: 0.2097, fontSize: 5 },
+  regnDate: { x: 0.5634, y: 0.3759, fontSize: 5 },
+  colour: { x: 0.5633, y: 0.4547, fontSize: 5 },
+  fuel: { x: 0.5634, y: 0.5263, fontSize: 5 },
+  vehicleClass: { x: 0.5634, y: 0.5961, fontSize: 5 },
+  bodyType: { x: 0.5634, y: 0.6676, fontSize: 5 },
+  manufacturer: { x: 0.5634, y: 0.7374, fontSize: 5 },
+  chassisNo: { x: 0.5634, y: 0.818, fontSize: 5 },
+  engineNo: { x: 0.5634, y: 0.8967, fontSize: 5 },
+  modelNo: { x: 0.5634, y: 0.9784, fontSize: 5 },
+  manufacturingDt: { x: 1.8724, y: 0.3911, fontSize: 5 },
+  seatCapacity: { x: 1.7091, y: 1.2926, fontSize: 5 },
+  standCapacity: { x: 1.711, y: 1.3601, fontSize: 5 },
+  noOfCyc: { x: 2.322, y: 1.2837, fontSize: 5 },
+  ownerSerial: { x: 2.3209, y: 1.3632, fontSize: 5 },
+  unladenWt: { x: 2.9477, y: 1.1292, w: 0.3081, h: 0.0841, fontSize: 5 },
+  cubicCapacity: { x: 2.9473, y: 1.2083, w: 0.2904, h: 0.0843, fontSize: 5 },
+  wheelBase: { x: 2.9467, y: 1.2878, w: 0.2549, h: 0.0872, fontSize: 5 },
+  rlw: { x: 2.9501, y: 1.3733, w: 0.3271, h: 0.0992, fontSize: 5 },
+  address: { x: 1.4731, y: 1.5582, fontSize: 5 },
+  issuingAuthority: { x: 1.463, y: 1.868, fontSize: 5 },
+  qrCode: { x: 0.0553, y: 1.0935, w: 0.9894, h: 0.905 },
+  regdValidity: { x: 2.9304, y: 0.3701, w: 0.4397, h: 0.132, fontSize: 5 },
+};
+
+const extractFirstString = (source: Record<string, any>, keys: string[]): string | undefined => {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return undefined;
+};
+
+const sanitizeExtractedValue = (value: unknown): string => {
+  if (typeof value !== 'string') return '';
+  const text = value.trim();
+  if (!text) return '';
+  const upper = text.toUpperCase();
+  const blockedPhrases = [
+    'NO HYPOTHECATION DETAILS FOUND',
+    'NO DETAILS FOUND',
+    'NOT FOUND',
+    'N/A',
+    'NA',
+    'NONE',
+    'NULL',
+    'FALSE',
+    'UNAVAILABLE',
+    'NOT AVAILABLE',
+    'UNKNOWN',
+  ];
+  if (blockedPhrases.includes(upper)) return '';
+  return text;
+};
+
+const findDateInText = (value: string): string => {
+  const match = value.match(/\b\d{2}[-/]\d{2}[-/]\d{4}\b/);
+  return match ? match[0].replaceAll('/', '-') : '';
+};
+
+const findDateAfterLabel = (value: string, labels: string[]): string => {
+  for (const label of labels) {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s*');
+    const regex = new RegExp(`${escaped}\\s*[:\\-]?\\s*(\\d{2}[\\/-]\\d{2}[\\/-]\\d{4})`, 'i');
+    const match = value.match(regex);
+    if (match?.[1]) return match[1].replaceAll('/', '-');
+  }
+  return '';
+};
+
+const normalizeKey = (key: string): string => key.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+const findValueForKeyLike = (source: Record<string, any>, keyTokens: string[]): string => {
+  const wanted = keyTokens.map(normalizeKey);
+  for (const [key, value] of Object.entries(source)) {
+    const normalized = normalizeKey(key);
+    if (wanted.some((token) => normalized.includes(token))) {
+      const cleaned = sanitizeExtractedValue(value);
+      if (cleaned) return cleaned;
+    }
+  }
+  return '';
+};
+
+const normalizeExtractedData = (raw: Record<string, any>): Partial<FormData> => {
+  const normalized: Record<string, any> = {};
+  for (const key of FORM_KEYS) {
+    normalized[key] = sanitizeExtractedValue(raw[key]);
+  }
+
+  const regdValidityRaw = extractFirstString(raw, [
+    'regdValidity',
+    'registrationValidity',
+    'registrationExpiry',
+    'registrationExpiryDate',
+    'regnValidity',
+    'regnExpiry',
+    'regnExpiryDate',
+    'regExpiry',
+    'regExpiryDate',
+    'regValidity',
+    'validityDate',
+    'validUpto',
+    'validTill',
+    'validityUpto',
+    'validUpTo',
+    'registrationValidUpto',
+    'registrationValidTill',
+    'fitnessValidUpto',
+    'fitnessValidity',
+    'fitnessValidTill',
+    'fitnessExpiry',
+    'fitnessExpiryDate',
+    'validity',
+    'expiryDate',
+    'expiry',
+    'rcValidity',
+    'rcExpiry',
+    'validTo',
+  ]);
+  const regdValidityLooseMatch = findValueForKeyLike(raw, [
+    'fitnessvalidupto',
+    'fitnessvalidupdo',
+    'fitnessvalidity',
+    'fitnessexpiry',
+    'regdvalidity',
+    'registrationvalidity',
+  ]);
+
+  const regdValidity = sanitizeExtractedValue(regdValidityRaw || regdValidityLooseMatch);
+  if (regdValidity) {
+    normalized.regdValidity = findDateInText(regdValidity) || regdValidity;
+  } else {
+    const fallbackCandidates = [
+      raw.registrationDetails,
+      raw.validityDetails,
+      raw.fitnessDetails,
+      raw.fitnessValidity,
+      raw.fitnessValidUpto,
+      raw.extraText,
+      raw.notes,
+      raw.rawText,
+      raw.text,
+    ]
+      .map(sanitizeExtractedValue)
+      .filter(Boolean);
+    for (const candidate of fallbackCandidates) {
+      const fromFitnessLabel = findDateAfterLabel(candidate, ['fitness valid upto', 'fitness validity', 'fitness expiry']);
+      if (fromFitnessLabel) {
+        normalized.regdValidity = fromFitnessLabel;
+        break;
+      }
+      const parsed = findDateInText(candidate);
+      if (parsed) {
+        normalized.regdValidity = parsed;
+        break;
+      }
+    }
+  }
+
+  return normalized as Partial<FormData>;
+};
+
 export default function App() {
   // ── ALL hooks must be declared before any conditional return ──
   const [showCalibrator, setShowCalibrator] = useState(false);
@@ -101,6 +303,10 @@ export default function App() {
   const [zoom, setZoom] = useState(1);
   const [customPrompt, setCustomPrompt] = useState(() => localStorage.getItem('rcCustomPrompt') || '');
   const [showSettings, setShowSettings] = useState(false);
+  const [isLayoutEditing, setIsLayoutEditing] = useState(false);
+  const [layoutResetTick, setLayoutResetTick] = useState(0);
+  const [templateSaveTick, setTemplateSaveTick] = useState(0);
+  const [templateSaved, setTemplateSaved] = useState(false);
   const qrRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -175,7 +381,24 @@ export default function App() {
 
       if (!res.ok) throw new Error('Failed to extract data: ' + await res.text());
       const extractedData = await res.json();
-      setFormData(prev => ({ ...prev, ...extractedData }));
+      const normalizedData = normalizeExtractedData(extractedData || {});
+      const found: Record<string, string> = {};
+      const missing: string[] = [];
+      for (const key of FORM_KEYS) {
+        const value = normalizedData[key] ?? '';
+        if (typeof value === 'string' && value.trim()) {
+          found[key] = value;
+        } else {
+          missing.push(key);
+        }
+      }
+      console.groupCollapsed('[RC Extraction] Field coverage');
+      console.log('Raw response:', extractedData);
+      console.log('Normalized response:', normalizedData);
+      console.log('Found fields:', found);
+      console.log('Missing fields:', missing);
+      console.groupEnd();
+      setFormData(prev => ({ ...prev, ...normalizedData }));
       setView('preview');
       confetti({ particleCount: 80, spread: 50, origin: { y: 0.8 }, colors: ['#2563eb', '#3b82f6', '#60a5fa'] });
     } catch (error) {
@@ -359,19 +582,64 @@ export default function App() {
               </div>
 
               <div className="flex-1 flex flex-col h-full bg-[#FAFAFB] relative overflow-hidden">
-                <div className="absolute top-8 right-8 flex gap-4 z-40 bg-white/80 backdrop-blur-xl p-2 rounded-2xl border border-slate-200/50 shadow-sm no-print">
+                <div className="absolute top-8 right-8 flex gap-3 z-40 bg-white/80 backdrop-blur-xl p-2 rounded-2xl border border-slate-200/50 shadow-sm no-print">
+                  <button
+                    onClick={() => setIsLayoutEditing(v => !v)}
+                    className={`px-4 text-[10px] font-black uppercase tracking-widest rounded-xl border transition-colors ${
+                      isLayoutEditing
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-slate-500 border-slate-200'
+                    }`}
+                  >
+                    {isLayoutEditing ? 'Editing On' : 'Edit Layout'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      localStorage.removeItem(LAYOUT_STORAGE_KEY);
+                      localStorage.removeItem(TEMPLATE_STORAGE_KEY);
+                      setLayoutResetTick(t => t + 1);
+                    }}
+                    className="px-4 text-[10px] font-black uppercase tracking-widest rounded-xl border bg-white text-slate-500 border-slate-200 hover:bg-slate-50"
+                  >
+                    Reset
+                  </button>
+                  <button
+                    onClick={() => {
+                      setTemplateSaveTick(t => t + 1);
+                      setTemplateSaved(true);
+                      setTimeout(() => setTemplateSaved(false), 1800);
+                    }}
+                    className={`px-4 text-[10px] font-black uppercase tracking-widest rounded-xl border ${
+                      templateSaved
+                        ? 'bg-emerald-600 text-white border-emerald-600'
+                        : 'bg-white text-emerald-700 border-emerald-200 hover:bg-emerald-50'
+                    }`}
+                  >
+                    {templateSaved ? 'Template Saved' : 'Save Template'}
+                  </button>
                   <button onClick={() => setZoom(z => Math.max(0.4, z - 0.1))} className="p-3 text-slate-400"><ZoomOut size={18} /></button>
                   <span className="text-[11px] font-black text-slate-500 min-w-[45px] text-center tabular-nums self-center">{Math.round(zoom * 100)}%</span>
                   <button onClick={() => setZoom(z => Math.min(2, z + 0.1))} className="p-3 text-slate-400"><ZoomIn size={18} /></button>
                 </div>
                 <div className="flex-1 overflow-auto bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:24px_24px] flex items-center justify-center p-12">
-                  {/* A4 preview: 210mm/297mm → scale to fit. A4 ratio = 1:1.414 */}
+                  {/* Card preview at exact 85.60mm x 53.98mm ratio */}
                   <motion.div
                     animate={{ scale: zoom }}
                     className="shadow-[0_40px_80px_-20px_rgba(0,0,0,0.15)] bg-white ring-1 ring-slate-200 relative"
-                    style={{ width: '330px', height: '467px', overflow: 'hidden', flexShrink: 0 }}
+                    style={{
+                      width: isLayoutEditing ? '860px' : '560px',
+                      height: `${560 / CARD_ASPECT}px`,
+                      overflow: 'hidden',
+                      flexShrink: 0,
+                    }}
                   >
-                    <CardPreview data={formData} signature={signature} />
+                    <CardPreview
+                      data={formData}
+                      signature={signature}
+                      isLayoutEditing={isLayoutEditing}
+                      layoutResetTick={layoutResetTick}
+                      templateSaveTick={templateSaveTick}
+                    />
                   </motion.div>
                 </div>
               </div>
@@ -391,44 +659,76 @@ export default function App() {
   );
 }
 
-function CardPreview({ data, signature }: any) {
+function CardPreview({
+  data,
+  signature,
+  isLayoutEditing,
+  layoutResetTick,
+  templateSaveTick,
+}: {
+  data: FormData;
+  signature: string | null;
+  isLayoutEditing: boolean;
+  layoutResetTick: number;
+  templateSaveTick: number;
+}) {
   // 1 inch = 244.57px on this 856px-wide canvas (856/3.5 = 244.57)
   const PPI = 244.57;
 
   // Load calibrated positions from localStorage (set by Calibrator tool)
   const getLayout = () => {
     try {
-      const saved = localStorage.getItem('rc_calibration_layout');
+      const saved =
+        localStorage.getItem(TEMPLATE_STORAGE_KEY) ||
+        localStorage.getItem(LAYOUT_STORAGE_KEY);
       if (saved) return JSON.parse(saved);
     } catch {}
     return null;
   };
+  const [layout, setLayout] = useState<Record<string, any>>(getLayout() ?? {});
+  const [selectedField, setSelectedField] = useState<string | null>(null);
+  const [draggingField, setDraggingField] = useState<string | null>(null);
+  const [resizingField, setResizingField] = useState<string | null>(null);
+  const [fontSizingField, setFontSizingField] = useState<string | null>(null);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [resizeStart, setResizeStart] = useState({ mouseX: 0, mouseY: 0, w: 0, h: 0 });
+  const [fontSizeStart, setFontSizeStart] = useState({ mouseY: 0, fontSize: 0 });
 
-  const L = getLayout();
-  const pos = (key: string, defaultX: number, defaultY: number, defaultSize: number) => {
-    const p = L?.[key];
-    return { x: p?.x ?? defaultX, y: p?.y ?? defaultY, size: p?.fontSize ?? defaultSize };
+  const wrapAt = (value: string, chunkSize: number) => {
+    if (!value) return '';
+    const cleaned = value.trim();
+    const chunks: string[] = [];
+    for (let i = 0; i < cleaned.length; i += chunkSize) {
+      chunks.push(cleaned.slice(i, i + chunkSize));
+    }
+    return chunks.join('\n');
   };
 
-  const Value = ({ x, y, size, bold, value }: any) => (
-    <div
-      className={`absolute leading-none uppercase whitespace-nowrap ${bold ? 'font-bold' : 'font-semibold'}`}
-      style={{
-        left: `${x * PPI}px`,
-        top: `${y * PPI}px`,
-        fontSize: `${(size / 72) * PPI}px`,
-        color: '#111',
-        fontFamily: 'Arial, sans-serif',
-      }}
-    >
-      {value}
-    </div>
-  );
+  const qrPayload = `Registeration No.:${data.regnNo || ''} Registeration Date:${data.regnDate || ''} Engine No.:${data.engineNo || ''} Chassis No.:${data.chassisNo || ''} Click URL to verify:https://qr.parivahan.gov.inedji/vq/qr?v=10o24T9kP39hXpb6`;
+
+  useEffect(() => {
+    setLayout(getLayout() ?? {});
+    setSelectedField(null);
+  }, [layoutResetTick]);
+
+  useEffect(() => {
+    if (!templateSaveTick) return;
+    localStorage.setItem(TEMPLATE_STORAGE_KEY, JSON.stringify(layout));
+    localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layout));
+  }, [templateSaveTick, layout]);
+
+  useEffect(() => {
+    if (!isLayoutEditing) {
+      setDraggingField(null);
+      setResizingField(null);
+      setFontSizingField(null);
+    }
+  }, [isLayoutEditing]);
 
   // A4 preview dimensions (px)
-  const PREVIEW_W = 330;
-  const PREVIEW_H = 467; // 330 * (11.69/8.27)
-  const PREVIEW_PPI = PREVIEW_W / 8.27; // ~39.9 px/in on preview
+  const PREVIEW_W = 560;
+  const PREVIEW_H = PREVIEW_W / CARD_ASPECT;
+  const PREVIEW_PPI = PREVIEW_W / (CARD_WIDTH_MM / 25.4);
   const QR_PREVIEW = Math.round(0.70 * PREVIEW_PPI);
   const QR_PRINT   = Math.round(0.70 * 96); // 96dpi for print
 
@@ -468,54 +768,335 @@ function CardPreview({ data, signature }: any) {
 
   // Resolve each field's position from calibration or default
   const resolved = FDEFS.map(f => {
-    const p = L?.[f.key];
+    const templateDefaults = DEFAULT_TEMPLATE_LAYOUT[f.key] ?? {};
+    const p = layout?.[f.key] ?? templateDefaults;
     return { 
       ...f, 
-      x: p?.x ?? f.dx, 
-      y: p?.y ?? f.dy, 
-      w: p?.w ?? f.dw, 
-      h: p?.h ?? f.dh, 
-      size: p?.fontSize ?? f.dSize 
+      x: p?.x ?? templateDefaults.x ?? f.dx, 
+      y: p?.y ?? templateDefaults.y ?? f.dy, 
+      w: p?.w ?? templateDefaults.w ?? f.dw, 
+      h: p?.h ?? templateDefaults.h ?? f.dh, 
+      size: p?.fontSize ?? templateDefaults.fontSize ?? f.dSize,
+      bold: typeof p?.bold === 'boolean' ? p.bold : (typeof templateDefaults.bold === 'boolean' ? templateDefaults.bold : f.bold),
     };
   });
+  const selectedResolved = selectedField ? resolved.find((f) => f.key === selectedField) : null;
+
+  const persistLayout = (next: Record<string, any>) => {
+    setLayout(next);
+  };
+
+  const updateSelectedField = (key: 'x' | 'y' | 'w' | 'h' | 'fontSize', value: string) => {
+    if (!selectedField) return;
+    const parsed = parseFloat(value);
+    if (Number.isNaN(parsed)) return;
+    const clamped =
+      key === 'fontSize'
+        ? Math.max(4, Math.min(28, parsed))
+        : key === 'w'
+        ? Math.max(0.08, parsed)
+        : key === 'h'
+        ? Math.max(0.05, parsed)
+        : Math.max(0, parsed);
+    persistLayout({
+      ...layout,
+      [selectedField]: {
+        ...(layout[selectedField] ?? {}),
+        [key]: +clamped.toFixed(key === 'fontSize' ? 1 : 4),
+      },
+    });
+  };
+
+  const updateSelectedWeight = (bold: boolean) => {
+    if (!selectedField) return;
+    persistLayout({
+      ...layout,
+      [selectedField]: {
+        ...(layout[selectedField] ?? {}),
+        bold,
+      },
+    });
+  };
+
+  const onCanvasMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isLayoutEditing || (!draggingField && !resizingField && !fontSizingField)) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (!rect) return;
+    const scaleX = rect.width / PREVIEW_W;
+    const scaleY = rect.height / PREVIEW_H;
+
+    if (draggingField) {
+      const field = resolved.find((f) => f.key === draggingField);
+      if (!field) return;
+      const rawPxX = e.clientX - rect.left - dragOffset.x;
+      const rawPxY = e.clientY - rect.top - dragOffset.y;
+      const maxLeftPx = rect.width - field.w * PREVIEW_PPI * scaleX;
+      const maxTopPx = rect.height - field.h * PREVIEW_PPI * scaleY;
+      const nextX = +(Math.max(0, Math.min(rawPxX, maxLeftPx)) / (PREVIEW_PPI * scaleX)).toFixed(4);
+      const nextY = +(Math.max(0, Math.min(rawPxY, maxTopPx)) / (PREVIEW_PPI * scaleY)).toFixed(4);
+      persistLayout({
+        ...layout,
+        [draggingField]: { ...(layout[draggingField] ?? {}), x: nextX, y: nextY },
+      });
+    }
+
+    if (resizingField) {
+      const dx = e.clientX - resizeStart.mouseX;
+      const dy = e.clientY - resizeStart.mouseY;
+      const nextW = +Math.max(0.08, resizeStart.w + dx / (PREVIEW_PPI * scaleX)).toFixed(4);
+      const nextH = +Math.max(0.05, resizeStart.h + dy / (PREVIEW_PPI * scaleY)).toFixed(4);
+      persistLayout({
+        ...layout,
+        [resizingField]: { ...(layout[resizingField] ?? {}), w: nextW, h: nextH },
+      });
+    }
+
+    if (fontSizingField) {
+      const dy = e.clientY - fontSizeStart.mouseY;
+      const deltaPt = -(dy / 4);
+      const nextFont = +Math.max(4, Math.min(28, fontSizeStart.fontSize + deltaPt)).toFixed(1);
+      persistLayout({
+        ...layout,
+        [fontSizingField]: { ...(layout[fontSizingField] ?? {}), fontSize: nextFont },
+      });
+    }
+  };
 
   return (
     <>
       {/* UI Preview — A4 scaled to 330×467px */}
-      <div
-        id="rc-card-preview"
-        className="relative bg-white font-sans overflow-hidden"
-        style={{ width: `${PREVIEW_W}px`, height: `${PREVIEW_H}px` }}
-      >
-        {resolved.map((f, i) => {
+      <div className="w-full h-full flex bg-white">
+        <div
+          id="rc-card-preview"
+          className="relative bg-white font-sans overflow-hidden border-r border-slate-200"
+          style={{ width: `${PREVIEW_W}px`, height: `${PREVIEW_H}px` }}
+          onMouseMove={onCanvasMouseMove}
+          onMouseUp={() => {
+            setDraggingField(null);
+            setResizingField(null);
+            setFontSizingField(null);
+          }}
+          onMouseLeave={() => {
+            setDraggingField(null);
+            setResizingField(null);
+            setFontSizingField(null);
+          }}
+        >
+          <img
+            src={CARD_MOCKUP_URL}
+            alt="RC card mockup"
+            className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+            draggable={false}
+            crossOrigin="anonymous"
+          />
+          {resolved.map((f, i) => {
           const left = f.x * PREVIEW_PPI;
           const top  = f.y * PREVIEW_PPI;
           const width = f.w * PREVIEW_PPI;
           const height = f.h * PREVIEW_PPI;
 
+          const onFieldMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+            if (!isLayoutEditing) return;
+            if ((e.target as HTMLElement).dataset.resizeHandle) return;
+            if ((e.target as HTMLElement).dataset.fontHandle) return;
+            e.preventDefault();
+            e.stopPropagation();
+            setSelectedField(f.key);
+            setDraggingField(f.key);
+            const rect = e.currentTarget.parentElement?.getBoundingClientRect();
+            if (!rect) return;
+            const scaleX = rect.width / PREVIEW_W;
+            const scaleY = rect.height / PREVIEW_H;
+            setDragOffset({ x: e.clientX - rect.left - left * scaleX, y: e.clientY - rect.top - top * scaleY });
+          };
+
+          const onResizeMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+            if (!isLayoutEditing) return;
+            e.preventDefault();
+            e.stopPropagation();
+            setSelectedField(f.key);
+            setResizingField(f.key);
+            setResizeStart({ mouseX: e.clientX, mouseY: e.clientY, w: f.w, h: f.h });
+          };
+
+          const onFontSizeMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+            if (!isLayoutEditing || f.isQR || f.isSig) return;
+            e.preventDefault();
+            e.stopPropagation();
+            setSelectedField(f.key);
+            setFontSizingField(f.key);
+            setFontSizeStart({ mouseY: e.clientY, fontSize: f.size || 6 });
+          };
+
           if (f.isQR) return (
-            <div key={i} className="absolute" style={{ left, top, width, height }}>
-              <QRCodeSVG value={JSON.stringify(data)} size={width} level="L" />
+            <div
+              key={i}
+              className={`absolute ${isLayoutEditing ? 'cursor-move' : ''}`}
+              style={{ left, top, width, height, border: isLayoutEditing ? '1px dashed #2563eb' : 'none' }}
+              onMouseDown={onFieldMouseDown}
+            >
+              <QRCodeSVG value={qrPayload} size={width} level="L" />
+              {isLayoutEditing && (
+                <div
+                  data-resize-handle="1"
+                  onMouseDown={onResizeMouseDown}
+                  className="absolute w-3 h-3 bg-blue-600 border border-white rounded-full"
+                  style={{ right: -6, bottom: -6, cursor: 'nwse-resize' }}
+                />
+              )}
             </div>
           );
           if (f.isSig) return signature ? (
-            <img key={i} src={signature} className="absolute object-contain mix-blend-multiply"
-              style={{ left, top, width, height }} />
+            <div
+              key={i}
+              className={`absolute ${isLayoutEditing ? 'cursor-move' : ''}`}
+              style={{
+                left,
+                top,
+                width,
+                height,
+                border: isLayoutEditing ? '1px dashed #9333ea' : 'none',
+                background: isLayoutEditing ? 'rgba(147,51,234,0.07)' : 'transparent',
+              }}
+              onMouseDown={onFieldMouseDown}
+            >
+              <img src={signature} className="w-full h-full object-contain mix-blend-multiply" />
+              {isLayoutEditing && (
+                <div
+                  data-resize-handle="1"
+                  onMouseDown={onResizeMouseDown}
+                  className="absolute w-3 h-3 bg-purple-600 border border-white rounded-full"
+                  style={{ right: -6, bottom: -6, cursor: 'nwse-resize' }}
+                />
+              )}
+            </div>
           ) : null;
           return (
-            <div key={i} className={`absolute leading-tight uppercase ${f.bold ? 'font-bold' : 'font-semibold'}`}
+            <div
+              key={i}
+              className={`absolute leading-tight uppercase ${f.bold ? 'font-bold' : 'font-semibold'} ${isLayoutEditing ? 'cursor-move' : ''}`}
               style={{ 
                 left, top, width, height, 
                 fontSize: `${(f.size / 72) * PREVIEW_PPI}px`, 
                 color: '#111', 
                 fontFamily: 'Arial, Helvetica, sans-serif',
-                whiteSpace: 'nowrap',
-                letterSpacing: '0.02em'
-              }}>
-              {f.value}
+                whiteSpace: f.key === 'address' ? 'pre-line' : 'nowrap',
+                letterSpacing: '0.02em',
+                border: isLayoutEditing ? `1px dashed ${selectedField === f.key ? '#0f172a' : '#64748b'}` : 'none',
+                background: isLayoutEditing ? 'rgba(255,255,255,0.2)' : 'transparent',
+              }}
+              onMouseDown={onFieldMouseDown}
+            >
+              {f.key === 'address' ? wrapAt(String(f.value || ''), 30) : f.value}
+              {isLayoutEditing && (
+                <>
+                  <div
+                    data-resize-handle="1"
+                    onMouseDown={onResizeMouseDown}
+                    className="absolute w-3 h-3 bg-slate-700 border border-white rounded-full"
+                    style={{ right: -6, bottom: -6, cursor: 'nwse-resize' }}
+                  />
+                  <div
+                    data-font-handle="1"
+                    onMouseDown={onFontSizeMouseDown}
+                    className="absolute w-3 h-3 bg-emerald-600 border border-white rounded-full"
+                    style={{ right: -6, top: -6, cursor: 'ns-resize' }}
+                    title="Drag up/down to change font size"
+                  />
+                </>
+              )}
             </div>
           );
-        })}
+          })}
+          {isLayoutEditing && (
+            <div className="absolute left-3 bottom-3 px-3 py-2 rounded-lg bg-slate-900/80 text-white text-[10px] font-bold tracking-wide pointer-events-none">
+              Drag field to move. Bottom-right handle: resize box. Top-right green handle: resize font.
+            </div>
+          )}
+        </div>
+        {isLayoutEditing && (
+          <div className="w-[300px] h-full bg-slate-50 p-4 overflow-y-auto">
+            <div className="rounded-xl bg-white border border-slate-200 shadow-sm p-3">
+              <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 mb-2">Field Inspector</div>
+              {selectedResolved ? (
+                <>
+                  <div className="text-xs font-bold text-slate-800 mb-3">{selectedResolved.key}</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="text-[10px] font-bold text-slate-500">
+                      X (in)
+                      <input
+                        type="number"
+                        step="0.001"
+                        value={selectedResolved.x}
+                        onChange={(e) => updateSelectedField('x', e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-700 bg-white"
+                      />
+                    </label>
+                    <label className="text-[10px] font-bold text-slate-500">
+                      Y (in)
+                      <input
+                        type="number"
+                        step="0.001"
+                        value={selectedResolved.y}
+                        onChange={(e) => updateSelectedField('y', e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-700 bg-white"
+                      />
+                    </label>
+                    <label className="text-[10px] font-bold text-slate-500">
+                      W (in)
+                      <input
+                        type="number"
+                        step="0.001"
+                        value={selectedResolved.w}
+                        onChange={(e) => updateSelectedField('w', e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-700 bg-white"
+                      />
+                    </label>
+                    <label className="text-[10px] font-bold text-slate-500">
+                      H (in)
+                      <input
+                        type="number"
+                        step="0.001"
+                        value={selectedResolved.h}
+                        onChange={(e) => updateSelectedField('h', e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-700 bg-white"
+                      />
+                    </label>
+                  </div>
+                  {!selectedResolved.isQR && !selectedResolved.isSig && (
+                    <>
+                      <label className="block text-[10px] font-bold text-slate-500 mt-2">
+                        Font Size (pt)
+                        <input
+                          type="number"
+                          step="0.1"
+                          value={selectedResolved.size}
+                          onChange={(e) => updateSelectedField('fontSize', e.target.value)}
+                          className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-700 bg-white"
+                        />
+                      </label>
+                      <label className="block text-[10px] font-bold text-slate-500 mt-2">
+                        Font Weight
+                        <select
+                          value={selectedResolved.bold ? 'bold' : 'normal'}
+                          onChange={(e) => updateSelectedWeight(e.target.value === 'bold')}
+                          className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-700 bg-white"
+                        >
+                          <option value="normal">Normal</option>
+                          <option value="bold">Bold</option>
+                        </select>
+                      </label>
+                    </>
+                  )}
+                </>
+              ) : (
+                <div className="text-[11px] text-slate-500 font-medium">
+                  Select any field on the card to edit its values here.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Hidden A4 print target — shifted off-screen but display:block for html2canvas */}
@@ -526,7 +1107,7 @@ function CardPreview({ data, signature }: any) {
           
           if (f.isQR) return (
             <div key={i} className="a4-field" style={{ position: 'absolute', left: px(f.x), top: px(f.y), width: px(f.w), height: px(f.h) }}>
-              <QRCodeSVG value={JSON.stringify(data)} size={f.w * 96} level="L" />
+              <QRCodeSVG value={qrPayload} size={f.w * 96} level="L" />
             </div>
           );
           if (f.isSig) return signature ? (
@@ -543,11 +1124,11 @@ function CardPreview({ data, signature }: any) {
                 fontWeight: f.bold ? 700 : 500, 
                 color: '#111',
                 textTransform: 'uppercase', 
-                whiteSpace: 'nowrap',
+                whiteSpace: f.key === 'address' ? 'pre-line' : 'nowrap',
                 letterSpacing: '0.03em',
-                lineHeight: '1',
+                lineHeight: f.key === 'address' ? '1.15' : '1',
               }}>
-              {f.value}
+              {f.key === 'address' ? wrapAt(String(f.value || ''), 30) : f.value}
             </div>
           );
         })}
