@@ -46,6 +46,14 @@ exports.extractRc = functions.https.onRequest(async (req, res) => {
       3. Names: Extract EXACTLY as written.
       4. Numbers: Extract Chassis/Engine numbers in full.
       5. Manufacturing Date: often in format MM/YYYY (e.g. 10/2024).
+      6. For issuingAuthority, if there is any RTA reference in the document, return in "RTA <City>" format (example: "RTA Gurgaon"), not only city/location text.
+      7. Do not use weight units like kg; include only the numeric value.
+      8. In address, include "HR " (with a space) just before the pincode.
+      9. Use temporary address, not permanent address, when both are present.
+      10. Do not include any commas in address.
+      11. If top of PDF contains "RTA Haryana" or any "RTA" reference, set regdValidity exactly as "As per Fitness" (title case), not all caps.
+      12. For vehicleClass, return format "<Title Case Base> (<UPPERCASE ABBR>)". Example: "MOTOR CAB (LVP)" should become "Motor Cab (LVP)".
+      13. For ownerSerial, always return two-digit format with leading zero when single digit (1 => 01, 2 => 02, ...).
 
       Additional Rules:
       ${customPrompt || "None"}

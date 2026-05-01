@@ -124,6 +124,7 @@ const CARD_ASPECT = CARD_WIDTH_MM / CARD_HEIGHT_MM;
 const CARD_MOCKUP_URL = 'https://file60.b-cdn.net/card-mockup.png';
 const LAYOUT_STORAGE_KEY = 'rc_calibration_layout';
 const TEMPLATE_STORAGE_KEY = 'rc_global_template_layout';
+const REGD_VALIDITY_LONG_TEXT_X = 2.58;
 const DEFAULT_TEMPLATE_LAYOUT: Record<string, Partial<{ x: number; y: number; w: number; h: number; fontSize: number; bold: boolean }>> = {
   regnNo: { x: 0.5537, y: 0.0421, w: 0.8292, h: 0.1301, fontSize: 5 },
   regdOwner: { x: 0.5523, y: 0.1265, fontSize: 5 },
@@ -734,9 +735,12 @@ function CardPreview({
   const resolved = FDEFS.map(f => {
     const templateDefaults = DEFAULT_TEMPLATE_LAYOUT[f.key] ?? {};
     const p = layout?.[f.key] ?? templateDefaults;
+    const baseX = p?.x ?? templateDefaults.x ?? f.dx;
+    const validityValue = (data.regdValidity || '').trim().toLowerCase();
+    const isLongValidity = f.key === 'regdValidity' && validityValue.startsWith('as per fitness');
     return { 
       ...f, 
-      x: p?.x ?? templateDefaults.x ?? f.dx, 
+      x: isLongValidity ? REGD_VALIDITY_LONG_TEXT_X : baseX, 
       y: p?.y ?? templateDefaults.y ?? f.dy, 
       w: p?.w ?? templateDefaults.w ?? f.dw, 
       h: p?.h ?? templateDefaults.h ?? f.dh, 
@@ -938,7 +942,7 @@ function CardPreview({
           return (
             <div
               key={i}
-              className={`absolute leading-tight uppercase ${f.bold ? 'font-bold' : 'font-semibold'} ${isLayoutEditing ? 'cursor-move' : ''}`}
+              className={`absolute leading-tight ${f.bold ? 'font-bold' : 'font-semibold'} ${isLayoutEditing ? 'cursor-move' : ''}`}
               style={{ 
                 left, top, width, height, 
                 fontSize: `${(f.size / 72) * PREVIEW_PPI}px`, 
@@ -1087,7 +1091,7 @@ function CardPreview({
                 fontFamily: 'Arial, Helvetica, sans-serif',
                 fontWeight: f.bold ? 700 : 500, 
                 color: '#111',
-                textTransform: 'uppercase', 
+                textTransform: 'none',
                 whiteSpace: f.key === 'address' ? 'pre-line' : 'nowrap',
                 letterSpacing: '0.03em',
                 lineHeight: f.key === 'address' ? '1.15' : '1',

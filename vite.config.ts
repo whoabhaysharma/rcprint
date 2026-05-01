@@ -60,7 +60,14 @@ export default defineConfig(({mode}) => {
                   9. Extract every listed key from the document if present; do not skip fields.
                   10. Do not return placeholder text for missing values. If not found, strictly return "".
                   11. For numeric fields (cubicCapacity, seatCapacity, standCapacity, wheelBase, unladenWt, noOfCyc, rlw), return only numeric value without units like KG/MM/CC.
-                  12. For ownerSerial, return two-digit format with leading zero if needed (01, 02, ...).
+                  12. For ownerSerial, always return two-digit format with leading zero when single digit (1 => 01, 2 => 02, ...).
+                  13. For issuingAuthority, if there is any RTA reference in the document, return in "RTA <City>" format (example: "RTA Gurgaon"), not only city/location text.
+                  14. Do not use weight units like kg; include only the numeric value.
+                  15. In address, include "HR " (with a space) just before the pincode.
+                  16. Use temporary address, not permanent address, when both are present.
+                  17. Do not include any commas in address.
+                  18. If top of PDF contains "RTA Haryana" or any "RTA" reference, set regdValidity exactly as "As per Fitness" (title case), not all caps.
+                  19. For vehicleClass, return format "<Title Case Base> (<UPPERCASE ABBR>)". Example: "MOTOR CAB (LVP)" should become "Motor Cab (LVP)".
 
                   Additional User Rules to follow strictly:
                   ${customPrompt || "None"}
