@@ -42,18 +42,18 @@ exports.extractRc = functions.https.onRequest(async (req, res) => {
       
       CRITICAL: 
       1. Return ONLY the JSON object. No other text.
-      2. Dates: Use DD-MM-YYYY format.
+      2. Dates: Use DD-MM-YYYY for regnDate and for regdValidity when the value is a calendar date (not "As per Fitness"). For manufacturingDt only, transcribe exactly as printed on the RC — same characters and separators; never reformat to MM/YYYY, DD-MM-YYYY, ISO, or any other normalized form.
       3. Names: Extract EXACTLY as written.
-      4. Numbers: Extract Chassis/Engine numbers in full.
-      5. Manufacturing Date: often in format MM/YYYY (e.g. 10/2024).
-      6. For issuingAuthority, if there is any RTA reference in the document, return in "RTA <City>" format (example: "RTA Gurgaon"), not only city/location text.
-      7. Do not use weight units like kg; include only the numeric value.
-      8. In address, include "HR " (with a space) just before the pincode.
-      9. Use temporary address, not permanent address, when both are present.
-      10. Do not include any commas in address.
-      11. If top of PDF contains "RTA Haryana" or any "RTA" reference, set regdValidity exactly as "As per Fitness" (title case), not all caps.
-      12. For vehicleClass, return format "<Title Case Base> (<UPPERCASE ABBR>)". Example: "MOTOR CAB (LVP)" should become "Motor Cab (LVP)".
-      13. For ownerSerial, always return two-digit format with leading zero when single digit (1 => 01, 2 => 02, ...).
+      4. Numbers: Extract Chassis/Engine numbers in full. For cubicCapacity, use digits only with no CC/cc suffix; when the RC shows a decimal capacity, preserve that exact decimal as printed — never round it to an integer.
+      5. Do not use weight units like kg; include only the numeric value.
+      6. In address, include "HR " (with a space) just before the pincode.
+      7. Use temporary address, not permanent address, when both are present.
+      8. Do not include any commas in address.
+      9. For ownerSerial, always return two-digit format with leading zero when single digit (1 => 01, 2 => 02, ...).
+      10. issuingAuthority and regdValidity — read the certificate and output final values (the client does not rewrite these):
+          - issuingAuthority: When the authority line already shows an office designation before the place name (e.g. RTA, SDM, DTO, RTO, ARTO, MLO, or similar), transcribe it exactly as printed. When the line is only a place or district name with no such prefix, output "SDM " followed by that place name (example: document shows only "Gurgaon" → "SDM Gurgaon"). When the document shows "RTA" with a place, keep that form (e.g. "RTA Gurgaon") as printed.
+          - regdValidity: If issuingAuthority contains "RTA" (any casing), set regdValidity exactly to "As per Fitness". If issuingAuthority does not contain "RTA", set regdValidity to the Fitness valid upto date from the document (labels may read "Fitness valid upto" or be misread as "Fitness valid updo") in DD-MM-YYYY — use that concrete fitness date as the expiry/validity for non-RTA authorities.
+      11. vehicleClass: Strip all parenthetical parts including the parentheses themselves (remove whatever appears inside (...)). Example: "MOTOR CAB (LVP)" → "Motor Cab". Title-case the remaining class text when the source is all caps.
 
       Additional Rules:
       ${customPrompt || "None"}

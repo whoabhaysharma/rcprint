@@ -153,124 +153,22 @@ const DEFAULT_TEMPLATE_LAYOUT: Record<string, Partial<{ x: number; y: number; w:
   regdValidity: { x: 2.9304, y: 0.3701, w: 0.4397, h: 0.132, fontSize: 5 },
 };
 
-const extractFirstString = (source: Record<string, any>, keys: string[]): string | undefined => {
-  for (const key of keys) {
-    const value = source[key];
-    if (typeof value === 'string' && value.trim()) return value.trim();
-  }
-  return undefined;
-};
-
 const sanitizeExtractedValue = (value: unknown): string => {
   if (typeof value !== 'string') return '';
   return value.trim();
 };
 
-const findDateInText = (value: string): string => {
-  const match = value.match(/\b\d{2}[-/]\d{2}[-/]\d{4}\b/);
-  return match ? match[0].replaceAll('/', '-') : '';
-};
-
-const findDateAfterLabel = (value: string, labels: string[]): string => {
-  for (const label of labels) {
-    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s*');
-    const regex = new RegExp(`${escaped}\\s*[:\\-]?\\s*(\\d{2}[\\/-]\\d{2}[\\/-]\\d{4})`, 'i');
-    const match = value.match(regex);
-    if (match?.[1]) return match[1].replaceAll('/', '-');
-  }
-  return '';
-};
-
-const normalizeKey = (key: string): string => key.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-const findValueForKeyLike = (source: Record<string, any>, keyTokens: string[]): string => {
-  const wanted = keyTokens.map(normalizeKey);
-  for (const [key, value] of Object.entries(source)) {
-    const normalized = normalizeKey(key);
-    if (wanted.some((token) => normalized.includes(token))) {
-      const cleaned = sanitizeExtractedValue(value);
-      if (cleaned) return cleaned;
-    }
-  }
-  return '';
-};
-
+/** Maps API JSON to form fields using model output only (trim); validity/authority/class rules live in the extraction prompt. */
 const normalizeExtractedData = (raw: Record<string, any>): Partial<FormData> => {
   const normalized: Record<string, any> = {};
   for (const key of FORM_KEYS) {
-    normalized[key] = sanitizeExtractedValue(raw[key]);
-  }
-
-  const regdValidityRaw = extractFirstString(raw, [
-    'regdValidity',
-    'registrationValidity',
-    'registrationExpiry',
-    'registrationExpiryDate',
-    'regnValidity',
-    'regnExpiry',
-    'regnExpiryDate',
-    'regExpiry',
-    'regExpiryDate',
-    'regValidity',
-    'validityDate',
-    'validUpto',
-    'validTill',
-    'validityUpto',
-    'validUpTo',
-    'registrationValidUpto',
-    'registrationValidTill',
-    'fitnessValidUpto',
-    'fitnessValidity',
-    'fitnessValidTill',
-    'fitnessExpiry',
-    'fitnessExpiryDate',
-    'validity',
-    'expiryDate',
-    'expiry',
-    'rcValidity',
-    'rcExpiry',
-    'validTo',
-  ]);
-  const regdValidityLooseMatch = findValueForKeyLike(raw, [
-    'fitnessvalidupto',
-    'fitnessvalidupdo',
-    'fitnessvalidity',
-    'fitnessexpiry',
-    'regdvalidity',
-    'registrationvalidity',
-  ]);
-
-  const regdValidity = sanitizeExtractedValue(regdValidityRaw || regdValidityLooseMatch);
-  if (regdValidity) {
-    normalized.regdValidity = findDateInText(regdValidity) || regdValidity;
-  } else {
-    const fallbackCandidates = [
-      raw.registrationDetails,
-      raw.validityDetails,
-      raw.fitnessDetails,
-      raw.fitnessValidity,
-      raw.fitnessValidUpto,
-      raw.extraText,
-      raw.notes,
-      raw.rawText,
-      raw.text,
-    ]
-      .map(sanitizeExtractedValue)
-      .filter(Boolean);
-    for (const candidate of fallbackCandidates) {
-      const fromFitnessLabel = findDateAfterLabel(candidate, ['fitness valid upto', 'fitness validity', 'fitness expiry']);
-      if (fromFitnessLabel) {
-        normalized.regdValidity = fromFitnessLabel;
-        break;
-      }
-      const parsed = findDateInText(candidate);
-      if (parsed) {
-        normalized.regdValidity = parsed;
-        break;
-      }
+    const v = raw[key];
+    if (key === 'cubicCapacity' && typeof v === 'number' && Number.isFinite(v)) {
+      normalized[key] = String(v);
+    } else {
+      normalized[key] = sanitizeExtractedValue(v);
     }
   }
-
   return normalized as Partial<FormData>;
 };
 
@@ -745,7 +643,7 @@ function CardPreview({
       w: p?.w ?? templateDefaults.w ?? f.dw, 
       h: p?.h ?? templateDefaults.h ?? f.dh, 
       size: p?.fontSize ?? templateDefaults.fontSize ?? f.dSize,
-      bold: typeof p?.bold === 'boolean' ? p.bold : (typeof templateDefaults.bold === 'boolean' ? templateDefaults.bold : f.bold),
+      bold: !(f.isQR || f.isSig),
     };
   });
   const selectedResolved = selectedField ? resolved.find((f) => f.key === selectedField) : null;
@@ -771,17 +669,6 @@ function CardPreview({
       [selectedField]: {
         ...(layout[selectedField] ?? {}),
         [key]: +clamped.toFixed(key === 'fontSize' ? 1 : 4),
-      },
-    });
-  };
-
-  const updateSelectedWeight = (bold: boolean) => {
-    if (!selectedField) return;
-    persistLayout({
-      ...layout,
-      [selectedField]: {
-        ...(layout[selectedField] ?? {}),
-        bold,
       },
     });
   };
@@ -942,7 +829,7 @@ function CardPreview({
           return (
             <div
               key={i}
-              className={`absolute leading-tight ${f.bold ? 'font-bold' : 'font-semibold'} ${isLayoutEditing ? 'cursor-move' : ''}`}
+              className={`absolute leading-tight font-bold ${isLayoutEditing ? 'cursor-move' : ''}`}
               style={{ 
                 left, top, width, height, 
                 fontSize: `${(f.size / 72) * PREVIEW_PPI}px`, 
@@ -1043,17 +930,6 @@ function CardPreview({
                           className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-700 bg-white"
                         />
                       </label>
-                      <label className="block text-[10px] font-bold text-slate-500 mt-2">
-                        Font Weight
-                        <select
-                          value={selectedResolved.bold ? 'bold' : 'normal'}
-                          onChange={(e) => updateSelectedWeight(e.target.value === 'bold')}
-                          className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-700 bg-white"
-                        >
-                          <option value="normal">Normal</option>
-                          <option value="bold">Bold</option>
-                        </select>
-                      </label>
                     </>
                   )}
                 </>
@@ -1089,7 +965,7 @@ function CardPreview({
                 width: px(f.w), height: px(f.h),
                 fontSize: `${f.size}pt`, 
                 fontFamily: 'Arial, Helvetica, sans-serif',
-                fontWeight: f.bold ? 700 : 500, 
+                fontWeight: 700,
                 color: '#111',
                 textTransform: 'none',
                 whiteSpace: f.key === 'address' ? 'pre-line' : 'nowrap',
@@ -1140,7 +1016,7 @@ function FormSection({ step, formData, onChange, onSign, signature }: any) {
       <FormInput formData={formData} onChange={onChange} label="Colour" name="colour" placeholder="Pearl White" />
       <FormInput formData={formData} onChange={onChange} label="Body Type" name="bodyType" placeholder="Hatchback" />
       <FormInput formData={formData} onChange={onChange} label="Class" name="vehicleClass" placeholder="Motor Car" />
-      <FormInput formData={formData} onChange={onChange} label="Mfg. Date" name="manufacturingDt" placeholder="MM/YYYY" />
+      <FormInput formData={formData} onChange={onChange} label="Mfg. Date" name="manufacturingDt" placeholder="As on RC" />
       <FormInput formData={formData} onChange={onChange} label="Validity" name="regdValidity" placeholder="DD-MM-YYYY" />
     </div>
   );
