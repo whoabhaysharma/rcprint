@@ -50,10 +50,11 @@ exports.extractRc = functions.https.onRequest(async (req, res) => {
       7. Use temporary address, not permanent address, when both are present.
       8. Do not include any commas in address.
       9. For ownerSerial, always return two-digit format with leading zero when single digit (1 => 01, 2 => 02, ...).
-      10. issuingAuthority and regdValidity — read the certificate and output final values (the client does not rewrite these):
-          - issuingAuthority: Output must be PREFIX + LOCATION only. If the RC prints any office designation before the place name, copy exactly what appears before the location and the location itself — same wording, spacing, uppercase/lowercase, and order as printed; do not rephrase or add words. If there is no designation before the place name (only the location appears), output "SDM" then one space then the location. No commas and no extra text.
-          - regdValidity: If issuingAuthority contains "RTA" (any casing), set regdValidity exactly to "As per Fitness". If issuingAuthority does not contain "RTA", set regdValidity to the Fitness valid upto date from the document (labels may read "Fitness valid upto" or be misread as "Fitness valid updo") in DD-MM-YYYY — use that concrete fitness date as the expiry/validity for non-RTA authorities.
-      11. vehicleClass: Strip all parenthetical parts including the parentheses themselves (remove whatever appears inside (...)). Example: "MOTOR CAB (LVP)" → "Motor Cab". Title-case the remaining class text when the source is all caps.
+      10. issuingAuthority and regdValidity — output these fields in final form in JSON. The web app will not rewrite them (only trims whitespace).
+          - issuingAuthority: Always output exactly PREFIX then one space then LOCATION. if nothing is in the pdf just before the location then output "SDM" then one space then the location. otherwise output the exact text that is in the pdf just before the location.
+          - regdValidity: If issuingAuthority is RTA-type (starts with RTA and a place), set exactly to "As per Fitness". Otherwise set to Fitness valid upto from the document in DD-MM-YYYY (labels may read "Fitness valid upto" or "Fitness valid updo").
+      11. hypothecatedTo: Extract **only** the bank or financier **name** (e.g. "HDFC BANK", "STATE BANK OF INDIA"). Omit branch addresses, loan/account numbers, legal boilerplate, the words "Hypothecated to", hyphens used as filler, and anything that is not the institution name. **Maximum 30 characters** total — abbreviate intelligently if needed so the string never exceeds 30 characters. Single line, no newlines. If there is no hypothecation, return "".
+      12. vehicleClass: Strip all parenthetical parts including the parentheses themselves (remove whatever appears inside (...)). Example: "MOTOR CAB (LVP)" → "Motor Cab". Title-case the remaining class text when the source is all caps.
 
       Additional Rules:
       ${customPrompt || "None"}

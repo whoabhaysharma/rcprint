@@ -62,10 +62,11 @@ export default defineConfig(({mode}) => {
                   11. In address, include "HR " (with a space) just before the pincode.
                   12. Use temporary address, not permanent address, when both are present.
                   13. Do not include any commas in address.
-                  14. issuingAuthority and regdValidity — read the certificate and output final values (the client does not rewrite these):
-                      - issuingAuthority: Output must be PREFIX + LOCATION only. If the RC prints any office designation before the place name, copy exactly what appears before the location and the location itself — same wording, spacing, casing, and order as printed; do not rephrase or add words. If there is no designation before the place name (only the location appears), output "SDM" then one space then the location. No commas and no extra text.
-                      - regdValidity: If issuingAuthority contains "RTA" (any casing), set regdValidity exactly to "As per Fitness". If issuingAuthority does not contain "RTA", set regdValidity to the Fitness valid upto date from the document (labels may read "Fitness valid upto" or be misread as "Fitness valid updo") in DD-MM-YYYY — use that concrete fitness date as the expiry/validity for non-RTA authorities.
-                  15. vehicleClass: Strip all parenthetical parts including the parentheses themselves (remove whatever appears inside (...)). Example: "MOTOR CAB (LVP)" → "Motor Cab". Title-case the remaining class text when the source is all caps.
+                  14. issuingAuthority and regdValidity — output final values in JSON. The client does not reformat these (only trims whitespace).
+                      - issuingAuthority: Always output PREFIX then one space then LOCATION. LOCATION is only the issuing place. For long department lines (e.g. STATE TRANSPORT DEPARTMENT AUTHORITY - PANCHKULA), LOCATION is the place after the final hyphen or after AUTHORITY as appropriate; PREFIX is SDM unless the line begins with a short office token (RTA, RTO, DTO, ARTO, SDM, MLO, etc.). Never return the full department sentence. You may use a newline in the string if needed.
+                      - regdValidity: If issuingAuthority is RTA-type (RTA + place), set "As per Fitness". Otherwise Fitness valid upto in DD-MM-YYYY.
+                  15. hypothecatedTo: Extract only the bank/financier name (not branch address, loan numbers, or "Hypothecated to" label text). Hard limit **30 characters** — shorten with sensible abbreviations if required. Single line, no newlines.
+                  16. vehicleClass: Strip all parenthetical parts including the parentheses themselves (remove whatever appears inside (...)). Example: "MOTOR CAB (LVP)" → "Motor Cab". Title-case the remaining class text when the source is all caps.
 
                   Additional User Rules to follow strictly:
                   ${customPrompt || "None"}

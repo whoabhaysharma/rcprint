@@ -175,79 +175,24 @@ const sanitizeExtractedValue = (value: unknown): string => {
   return value.trim();
 };
 
-/** Manufacturing month/year for RC: always MM/YYYY (two-digit month). */
-const formatManufacturingDtMmYyyy = (raw: string): string => {
-  const s = raw.trim();
+/** RC hypothecation line: bank / financier name only; hard cap for card layout. */
+const HYPO_BANK_MAX_LEN = 30;
+
+const clampHypothecatedTo = (raw: string): string => {
+  const s = raw.replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
   if (!s) return '';
-  let m = s.match(/^(\d{1,2})[\/\-.](\d{4})$/);
-  if (m) {
-    const month = parseInt(m[1], 10);
-    const year = parseInt(m[2], 10);
-    if (month >= 1 && month <= 12 && year >= 1900 && year <= 2100) {
-      return `${String(month).padStart(2, '0')}/${year}`;
-    }
-  }
-  m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
-  if (m) {
-    const day = parseInt(m[1], 10);
-    const month = parseInt(m[2], 10);
-    const year = parseInt(m[3], 10);
-    if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && year >= 1900 && year <= 2100) {
-      return `${String(month).padStart(2, '0')}/${year}`;
-    }
-  }
-  m = s.match(/^(\d{4})[\/\-](\d{1,2})$/);
-  if (m) {
-    const year = parseInt(m[1], 10);
-    const month = parseInt(m[2], 10);
-    if (month >= 1 && month <= 12 && year >= 1900 && year <= 2100) {
-      return `${String(month).padStart(2, '0')}/${year}`;
-    }
-  }
-  return s;
+  return s.length <= HYPO_BANK_MAX_LEN ? s : s.slice(0, HYPO_BANK_MAX_LEN).trimEnd();
 };
 
-/** PREFIX + LOCATION: if no known office token before place, default PREFIX is SDM. */
-const ISSUING_AUTH_OFFICE_PREFIX =
-  /^(RTA|SDM|RTO|DTO|ARTO|MLO|DHO|ADO|RLA|ASST\.?|JT\.?|DY\.?)\b/i;
-
-const normalizeIssuingAuthority = (raw: string): string => {
-  const s = raw.replace(/,/g, ' ').replace(/\s+/g, ' ').trim();
-  if (!s) return '';
-  if (ISSUING_AUTH_OFFICE_PREFIX.test(s)) return s;
-  return `SDM ${s}`;
-};
-
-const HYPO_LINE_MAX = 12;
-
-/** If longer than HYPO_LINE_MAX chars, continue on new line(s); prefer breaking at spaces. */
-const wrapHypothecatedToValue = (raw: string): string => {
-  const s = raw.replace(/\s+/g, ' ').trim();
-  if (!s || s.length <= HYPO_LINE_MAX) return s;
-  const parts: string[] = [];
-  let rest = s;
-  while (rest.length > HYPO_LINE_MAX) {
-    let cut = HYPO_LINE_MAX;
-    const sp = rest.lastIndexOf(' ', HYPO_LINE_MAX);
-    if (sp > 2) cut = sp;
-    parts.push(rest.slice(0, cut).trimEnd());
-    rest = rest.slice(cut).trimStart();
-  }
-  if (rest) parts.push(rest);
-  return parts.join('\n');
-};
-
-/** Maps API JSON to form fields using model output only (trim); validity/authority/class rules live in the extraction prompt. */
+/** Maps API JSON to form fields: trim strings; numbers coerced where needed; hypothec capped. */
 const normalizeExtractedData = (raw: Record<string, any>): Partial<FormData> => {
   const normalized: Record<string, any> = {};
   for (const key of FORM_KEYS) {
     const v = raw[key];
     if (key === 'cubicCapacity' && typeof v === 'number' && Number.isFinite(v)) {
       normalized[key] = String(v);
-    } else if (key === 'manufacturingDt') {
-      normalized[key] = formatManufacturingDtMmYyyy(sanitizeExtractedValue(v));
-    } else if (key === 'issuingAuthority') {
-      normalized[key] = normalizeIssuingAuthority(sanitizeExtractedValue(v));
+    } else if (key === 'hypothecatedTo') {
+      normalized[key] = clampHypothecatedTo(sanitizeExtractedValue(v));
     } else {
       normalized[key] = sanitizeExtractedValue(v);
     }
@@ -294,20 +239,6 @@ export default function App() {
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
-  };
-
-  const handleManufacturingDtBlur = () => {
-    setFormData(prev => ({
-      ...prev,
-      manufacturingDt: formatManufacturingDtMmYyyy(prev.manufacturingDt || ''),
-    }));
-  };
-
-  const handleIssuingAuthorityBlur = () => {
-    setFormData(prev => ({
-      ...prev,
-      issuingAuthority: normalizeIssuingAuthority(prev.issuingAuthority || ''),
-    }));
   };
 
   const handleSignatureChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -397,8 +328,7 @@ export default function App() {
       
       await addDoc(collection(db, 'registrations'), {
         ...formData,
-        manufacturingDt: formatManufacturingDtMmYyyy(formData.manufacturingDt || ''),
-        issuingAuthority: normalizeIssuingAuthority(formData.issuingAuthority || ''),
+        hypothecatedTo: clampHypothecatedTo(formData.hypothecatedTo || ''),
         userId: user!.uid,
         userEmail: user!.email,
         createdAt: serverTimestamp(),
@@ -495,10 +425,10 @@ export default function App() {
                 </div>
                 <div className="space-y-16">
                   <FormSection step={0} formData={formData} onChange={handleInputChange} />
-                  <FormSection step={1} formData={formData} onChange={handleInputChange} onManufacturingDtBlur={handleManufacturingDtBlur} />
+                  <FormSection step={1} formData={formData} onChange={handleInputChange} />
                   <FormSection step={2} formData={formData} onChange={handleInputChange} />
                   <FormSection step={3} formData={formData} onChange={handleInputChange} />
-                  <FormSection step={4} formData={formData} onChange={handleInputChange} onIssuingAuthorityBlur={handleIssuingAuthorityBlur} onSign={handleSignatureChange} signature={signature} />
+                  <FormSection step={4} formData={formData} onChange={handleInputChange} onSign={handleSignatureChange} signature={signature} />
                 </div>
                 <div className="fixed bottom-0 left-0 lg:w-[460px] w-full p-6 bg-white/95 backdrop-blur-2xl border-t border-slate-100 z-50 flex gap-4 no-print">
                   <button
@@ -661,16 +591,6 @@ function CardPreview({
   const [resizeStart, setResizeStart] = useState({ mouseX: 0, mouseY: 0, w: 0, h: 0 });
   const [fontSizeStart, setFontSizeStart] = useState({ mouseY: 0, fontSize: 0 });
 
-  const wrapAt = (value: string, chunkSize: number) => {
-    if (!value) return '';
-    const cleaned = value.trim();
-    const chunks: string[] = [];
-    for (let i = 0; i < cleaned.length; i += chunkSize) {
-      chunks.push(cleaned.slice(i, i + chunkSize));
-    }
-    return chunks.join('\n');
-  };
-
   const qrPayload = `Registeration No.:${data.regnNo || ''} Registeration Date:${data.regnDate || ''} Engine No.:${data.engineNo || ''} Chassis No.:${data.chassisNo || ''} Click URL to verify:https://qr.parivahan.gov.inedji/vq/qr?v=10o24T9kP39hXpb6`;
 
   useEffect(() => {
@@ -715,9 +635,9 @@ function CardPreview({
     { key: 'chassisNo',       dx: 0.5694, dy: 0.8481 + MAIN_VALUE_Y_NUDGE_IN, dw: 1.3262, dh: 0.0811, dSize: 6.5,              value: data.chassisNo },
     { key: 'engineNo',        dx: 0.5694, dy: 0.9268 + MAIN_VALUE_Y_NUDGE_IN, dw: 1.3173, dh: 0.0752, dSize: 6.5,              value: data.engineNo },
     { key: 'modelNo',         dx: 0.5694, dy: 1.0025 + MAIN_VALUE_Y_NUDGE_IN, dw: 1.3646, dh: 0.0782, dSize: 6,   bold: true,  value: data.modelNo },
-    { key: 'manufacturingDt', dx: 1.8363 + MFG_VALIDITY_X_NUDGE_IN, dy: 0.3972 + MFG_VALIDITY_Y_NUDGE_IN, dw: 0.4285, dh: 0.09, dSize: 6.5,              value: formatManufacturingDtMmYyyy(data.manufacturingDt || '') },
+    { key: 'manufacturingDt', dx: 1.8363 + MFG_VALIDITY_X_NUDGE_IN, dy: 0.3972 + MFG_VALIDITY_Y_NUDGE_IN, dw: 0.4285, dh: 0.09, dSize: 6.5,              value: data.manufacturingDt },
     { key: 'regdValidity',    dx: 2.8797 + MFG_VALIDITY_X_NUDGE_IN, dy: 0.4002 + MFG_VALIDITY_Y_NUDGE_IN, dw: 0.5962, dh: 0.0959, dSize: 6.5,              value: data.regdValidity },
-    { key: 'hypothecatedTo',  dx: 1.6964, dy: 1.1218, dw: 0.9, dh: 0.135, dSize: 5,   bold: true,  value: wrapHypothecatedToValue(data.hypothecatedTo || '') },
+    { key: 'hypothecatedTo',  dx: 1.6964, dy: 1.1218, dw: 0.9, dh: 0.135, dSize: 5,   bold: true,  value: clampHypothecatedTo(String(data.hypothecatedTo || '')) },
     { key: 'unladenWt',       dx: 2.908 + SPEC_GRID_X_NUDGE_IN, dy: 1.1653 + SPEC_GRID_Y_NUDGE_IN, dw: 0.597, dh: 0.0841, dSize: 6,                value: data.unladenWt },
     { key: 'cubicCapacity',   dx: 2.9081 + SPEC_GRID_X_NUDGE_IN, dy: 1.2504 + SPEC_GRID_Y_NUDGE_IN, dw: 0.5793, dh: 0.0723, dSize: 6,                value: data.cubicCapacity },
     { key: 'wheelBase',       dx: 2.908 + SPEC_GRID_X_NUDGE_IN, dy: 1.3239 + SPEC_GRID_Y_NUDGE_IN, dw: 0.5498, dh: 0.0752, dSize: 6,                value: data.wheelBase },
@@ -727,7 +647,7 @@ function CardPreview({
     { key: 'noOfCyc',         dx: 2.2859 + SPEC_GRID_X_NUDGE_IN, dy: 1.2957 + SPEC_GRID_Y_NUDGE_IN, dw: 0.35, dh: 0.09, dSize: 6.5,              value: data.noOfCyc },
     { key: 'ownerSerial',     dx: 2.2848 + SPEC_GRID_X_NUDGE_IN, dy: 1.3873 + SPEC_GRID_Y_NUDGE_IN, dw: 0.35, dh: 0.09, dSize: 6.5,              value: data.ownerSerial },
     { key: 'address',         dx: 1.443, dy: 1.5462, dw: 1.5004, dh: 0.2191, dSize: 6,                value: data.address },
-    { key: 'issuingAuthority',dx: 1.7278, dy: 1.88, dw: 0.7612, dh: 0.103, dSize: 7,   bold: true,  value: normalizeIssuingAuthority(data.issuingAuthority || '') },
+    { key: 'issuingAuthority',dx: 1.7278, dy: 1.88, dw: 0.7612, dh: 0.103, dSize: 7,   bold: true,  value: data.issuingAuthority },
     { key: 'qrCode',          dx: 0.0734 + (0.9954 * (1 - QR_SCALE)) / 2, dy: 1.0935 + (1.0013 * (1 - QR_SCALE)) / 2, dw: 0.9954 * QR_SCALE, dh: 1.0013 * QR_SCALE, dSize: 0,   isQR: true,  value: '' },
     { key: 'signature',       dx: 2.6447, dy: 1.8643, dw: 0.8, dh: 0.12, dSize: 0,   isSig: true, value: '' },
   ];
@@ -939,15 +859,15 @@ function CardPreview({
                 fontSize: `${(f.size / 72) * PREVIEW_PPI}px`, 
                 color: '#111', 
                 fontFamily: 'Arial, Helvetica, sans-serif',
-                whiteSpace: f.key === 'address' || f.key === 'hypothecatedTo' ? 'pre-line' : 'nowrap',
+                whiteSpace: f.key === 'address' ? 'pre-line' : 'nowrap',
                 letterSpacing: '0.02em',
-                lineHeight: f.key === 'address' || f.key === 'hypothecatedTo' ? '1.15' : '1',
+                lineHeight: f.key === 'address' ? '1.15' : '1',
                 border: isLayoutEditing ? `1px dashed ${selectedField === f.key ? '#0f172a' : '#64748b'}` : 'none',
                 background: isLayoutEditing ? 'rgba(255,255,255,0.2)' : 'transparent',
               }}
               onMouseDown={onFieldMouseDown}
             >
-              {f.key === 'address' ? wrapAt(String(f.value || ''), 30) : f.value}
+              {f.value}
               {isLayoutEditing && (
                 <>
                   <div
@@ -1073,11 +993,11 @@ function CardPreview({
                 fontWeight: 700,
                 color: '#111',
                 textTransform: 'none',
-                whiteSpace: f.key === 'address' || f.key === 'hypothecatedTo' ? 'pre-line' : 'nowrap',
+                whiteSpace: f.key === 'address' ? 'pre-line' : 'nowrap',
                 letterSpacing: '0.03em',
-                lineHeight: f.key === 'address' || f.key === 'hypothecatedTo' ? '1.15' : '1',
+                lineHeight: f.key === 'address' ? '1.15' : '1',
               }}>
-              {f.key === 'address' ? wrapAt(String(f.value || ''), 30) : f.value}
+              {f.value}
             </div>
           );
         })}
@@ -1088,7 +1008,7 @@ function CardPreview({
 
 
 
-function FormInput({ label, name, placeholder, type = "text", formData, onChange, onBlur }: any) {
+function FormInput({ label, name, placeholder, type = "text", formData, onChange, onBlur, maxLength }: any) {
   return (
     <div className="space-y-3">
       <label className="block text-[10px] font-black uppercase tracking-[0.25em] text-slate-400 ml-1">{label}</label>
@@ -1098,6 +1018,7 @@ function FormInput({ label, name, placeholder, type = "text", formData, onChange
         value={formData[name] || ''}
         onChange={onChange}
         onBlur={onBlur}
+        maxLength={maxLength}
         placeholder={placeholder}
         className="w-full bg-slate-50/50 border border-slate-100 rounded-2xl px-6 py-5 font-bold focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-100/20 outline-none transition-all placeholder:text-slate-200 text-sm shadow-sm"
       />
@@ -1105,7 +1026,7 @@ function FormInput({ label, name, placeholder, type = "text", formData, onChange
   );
 }
 
-function FormSection({ step, formData, onChange, onManufacturingDtBlur, onIssuingAuthorityBlur, onSign, signature }: any) {
+function FormSection({ step, formData, onChange, onSign, signature }: any) {
   if (step === 0) return (
     <div className="grid grid-cols-2 gap-8">
       <FormInput formData={formData} onChange={onChange} label="Regn No" name="regnNo" placeholder="HR26EB5601" />
@@ -1122,7 +1043,7 @@ function FormSection({ step, formData, onChange, onManufacturingDtBlur, onIssuin
       <FormInput formData={formData} onChange={onChange} label="Colour" name="colour" placeholder="Pearl White" />
       <FormInput formData={formData} onChange={onChange} label="Body Type" name="bodyType" placeholder="Hatchback" />
       <FormInput formData={formData} onChange={onChange} label="Class" name="vehicleClass" placeholder="Motor Car" />
-      <FormInput formData={formData} onChange={onChange} onBlur={onManufacturingDtBlur} label="Mfg. Date" name="manufacturingDt" placeholder="MM/YYYY" />
+      <FormInput formData={formData} onChange={onChange} label="Mfg. Date" name="manufacturingDt" placeholder="As printed / MM/YYYY if applicable" />
       <FormInput formData={formData} onChange={onChange} label="Validity" name="regdValidity" placeholder="DD-MM-YYYY" />
     </div>
   );
@@ -1159,8 +1080,8 @@ function FormSection({ step, formData, onChange, onManufacturingDtBlur, onIssuin
   );
   if (step === 4) return (
     <div className="grid grid-cols-2 gap-8">
-      <FormInput formData={formData} onChange={onChange} onBlur={onIssuingAuthorityBlur} label="Authority" name="issuingAuthority" placeholder="e.g. SDM Gurgaon or RTA Gurgaon" />
-      <FormInput formData={formData} onChange={onChange} label="Hypothecation" name="hypothecatedTo" placeholder="Bank Name" />
+      <FormInput formData={formData} onChange={onChange} label="Authority" name="issuingAuthority" placeholder="Per RC" />
+      <FormInput formData={formData} onChange={onChange} label="Hypothecation" name="hypothecatedTo" placeholder="Bank name (max 30 chars)" maxLength={HYPO_BANK_MAX_LEN} />
       <div className="space-y-3">
         <label className="block text-[10px] font-black uppercase tracking-[0.25em] text-slate-400 ml-1">Signature</label>
         <div className="relative">
