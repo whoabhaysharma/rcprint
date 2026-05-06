@@ -42,7 +42,7 @@ const DEFAULT_LAYOUT: Record<string, { x: number; y: number; w: number; h: numbe
   "modelNo": { "x": 0.5694, "y": 1.0025 + MAIN_VALUE_Y_NUDGE_IN, "w": 1.3646, "h": 0.0782, "fontSize": 6 },
   "manufacturingDt": { "x": 1.8363 + MFG_VALIDITY_X_NUDGE_IN, "y": 0.3972 + MFG_VALIDITY_Y_NUDGE_IN, "w": 0.4285, "h": 0.09, "fontSize": 6.5 },
   "regdValidity": { "x": 2.8797 + MFG_VALIDITY_X_NUDGE_IN, "y": 0.4002 + MFG_VALIDITY_Y_NUDGE_IN, "w": 0.5962, "h": 0.0959, "fontSize": 6.5 },
-  "hypothecatedTo": { "x": 1.6964, "y": 1.1218, "w": 0.9, "h": 0.09, "fontSize": 6.5 },
+  "hypothecatedTo": { "x": 1.6964, "y": 1.1218, "w": 0.9, "h": 0.135, "fontSize": 5 },
   "unladenWt": { "x": 2.908 + SPEC_GRID_X_NUDGE_IN, "y": 1.1653 + SPEC_GRID_Y_NUDGE_IN, "w": 0.597, "h": 0.0841, "fontSize": 6 },
   "cubicCapacity": { "x": 2.9081 + SPEC_GRID_X_NUDGE_IN, "y": 1.2504 + SPEC_GRID_Y_NUDGE_IN, "w": 0.5793, "h": 0.0723, "fontSize": 6 },
   "wheelBase": { "x": 2.908 + SPEC_GRID_X_NUDGE_IN, "y": 1.3239 + SPEC_GRID_Y_NUDGE_IN, "w": 0.5498, "h": 0.0752, "fontSize": 6 },

@@ -50,7 +50,7 @@ export default defineConfig(({mode}) => {
                   
                   CRITICAL: 
                   1. Return ONLY the JSON object. No other text.
-                  2. Date formatting: Use DD-MM-YYYY for regnDate and for regdValidity when the value is a calendar date (not the phrase "As per Fitness"). For manufacturingDt only, transcribe **exactly** as printed on the RC — same characters, separators, spacing, and order; never convert it to another format (no forced MM/YYYY, DD-MM-YYYY, or ISO).
+                  2. Date formatting: Use DD-MM-YYYY for regnDate and for regdValidity when the value is a calendar date (not the phrase "As per Fitness"). For manufacturingDt only, output **MM/YYYY** always: two-digit month (01–12), four-digit year, slash separator (e.g. 08/2024). Read the RC and normalize to this form (e.g. 8/2024 → 08/2024, 10-2024 → 10/2024).
                   3. Extract the Registration Number (e.g., HR26EB5601) accurately.
                   4. Extract the Owner details and Address accurately.
                   5. If any detail is missing, return "" (empty string) only. Never return placeholder text like "NO HYPOTHECATION DETAILS FOUND", "NOT FOUND", "N/A", "FALSE", or "NULL".
@@ -63,7 +63,7 @@ export default defineConfig(({mode}) => {
                   12. Use temporary address, not permanent address, when both are present.
                   13. Do not include any commas in address.
                   14. issuingAuthority and regdValidity — read the certificate and output final values (the client does not rewrite these):
-                      - issuingAuthority: When the authority line already shows an office designation before the place name (e.g. RTA, SDM, DTO, RTO, ARTO, MLO, or similar), transcribe it exactly as printed (including spacing and casing from the document). When the line is only a place or district name with no such prefix, output "SDM " followed by that place name (example: document shows only "Gurgaon" → "SDM Gurgaon"). When the document shows "RTA" with a place, keep that form (e.g. "RTA Gurgaon") as printed.
+                      - issuingAuthority: Output must be PREFIX + LOCATION only. If the RC prints any office designation before the place name, copy exactly what appears before the location and the location itself — same wording, spacing, casing, and order as printed; do not rephrase or add words. If there is no designation before the place name (only the location appears), output "SDM" then one space then the location. No commas and no extra text.
                       - regdValidity: If issuingAuthority contains "RTA" (any casing), set regdValidity exactly to "As per Fitness". If issuingAuthority does not contain "RTA", set regdValidity to the Fitness valid upto date from the document (labels may read "Fitness valid upto" or be misread as "Fitness valid updo") in DD-MM-YYYY — use that concrete fitness date as the expiry/validity for non-RTA authorities.
                   15. vehicleClass: Strip all parenthetical parts including the parentheses themselves (remove whatever appears inside (...)). Example: "MOTOR CAB (LVP)" → "Motor Cab". Title-case the remaining class text when the source is all caps.
 
