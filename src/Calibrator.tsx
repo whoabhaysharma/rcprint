@@ -15,33 +15,50 @@ const BASE_CANVAS_W = 700;
 
 const LS_KEY = 'rc_calibration_layout';
 
+/** Seat/stand/cyl/serial + weight/CC/wheel/RLW; match App preview. */
+const SPEC_GRID_X_NUDGE_IN = -0.028;
+const SPEC_GRID_Y_NUDGE_IN = 0.018;
+/** Match App preview: mfg + regd validity vs mockup. */
+const MFG_VALIDITY_X_NUDGE_IN = -0.028;
+const MFG_VALIDITY_Y_NUDGE_IN = 0.018;
+/** Match App preview: nudge main column values down vs mockup labels. */
+const MAIN_VALUE_Y_NUDGE_IN = 0.017;
+const QR_SCALE = 0.955;
+const QR_CAL_BASE = { x: 0.0734, y: 1.0935, w: 0.9954, h: 1.0013 } as const;
+
 // x, y, w, h in inches; fontSize in pt
 const DEFAULT_LAYOUT: Record<string, { x: number; y: number; w: number; h: number; fontSize: number }> = {
-  "regnNo": { "x": 0.5704, "y": 0.0474, "w": 1.1, "h": 0.1, "fontSize": 8 },
-  "regdOwner": { "x": 0.5704, "y": 0.1445, "w": 1.0793, "h": 0.0911, "fontSize": 7 },
-  "swdOf": { "x": 0.5694, "y": 0.2337, "w": 1.0498, "h": 0.0793, "fontSize": 7 },
-  "regnDate": { "x": 0.5694, "y": 0.4181, "w": 0.8793, "h": 0.0752, "fontSize": 6.5 },
-  "colour": { "x": 0.5694, "y": 0.4908, "w": 0.8321, "h": 0.0723, "fontSize": 6.5 },
-  "fuel": { "x": 0.5694, "y": 0.5624, "w": 0.8793, "h": 0.0722, "fontSize": 6.5 },
-  "vehicleClass": { "x": 0.5694, "y": 0.6322, "w": 0.8616, "h": 0.0752, "fontSize": 6.5 },
-  "bodyType": { "x": 0.5694, "y": 0.7097, "w": 0.8645, "h": 0.0723, "fontSize": 6.5 },
-  "manufacturer": { "x": 0.5694, "y": 0.7795, "w": 1.2937, "h": 0.0752, "fontSize": 6 },
-  "chassisNo": { "x": 0.5694, "y": 0.8481, "w": 1.3262, "h": 0.0811, "fontSize": 6.5 },
-  "engineNo": { "x": 0.5694, "y": 0.9268, "w": 1.3173, "h": 0.0752, "fontSize": 6.5 },
-  "modelNo": { "x": 0.5694, "y": 1.0025, "w": 1.3646, "h": 0.0782, "fontSize": 6 },
-  "manufacturingDt": { "x": 1.8363, "y": 0.3972, "w": 0.4285, "h": 0.09, "fontSize": 6.5 },
-  "regdValidity": { "x": 2.8797, "y": 0.4002, "w": 0.5962, "h": 0.0959, "fontSize": 6.5 },
+  "regnNo": { "x": 0.5704, "y": 0.0474 + MAIN_VALUE_Y_NUDGE_IN, "w": 1.1, "h": 0.1, "fontSize": 8 },
+  "regdOwner": { "x": 0.5704, "y": 0.1445 + MAIN_VALUE_Y_NUDGE_IN, "w": 1.0793, "h": 0.0911, "fontSize": 7 },
+  "swdOf": { "x": 0.5694, "y": 0.2337 + MAIN_VALUE_Y_NUDGE_IN, "w": 1.0498, "h": 0.0793, "fontSize": 7 },
+  "regnDate": { "x": 0.5694, "y": 0.4181 + MAIN_VALUE_Y_NUDGE_IN, "w": 0.8793, "h": 0.0752, "fontSize": 6.5 },
+  "colour": { "x": 0.5694, "y": 0.4908 + MAIN_VALUE_Y_NUDGE_IN, "w": 0.8321, "h": 0.0723, "fontSize": 6.5 },
+  "fuel": { "x": 0.5694, "y": 0.5624 + MAIN_VALUE_Y_NUDGE_IN, "w": 0.8793, "h": 0.0722, "fontSize": 6.5 },
+  "vehicleClass": { "x": 0.5694, "y": 0.6322 + MAIN_VALUE_Y_NUDGE_IN, "w": 0.8616, "h": 0.0752, "fontSize": 6.5 },
+  "bodyType": { "x": 0.5694, "y": 0.7097 + MAIN_VALUE_Y_NUDGE_IN, "w": 0.8645, "h": 0.0723, "fontSize": 6.5 },
+  "manufacturer": { "x": 0.5694, "y": 0.7795 + MAIN_VALUE_Y_NUDGE_IN, "w": 1.2937, "h": 0.0752, "fontSize": 6 },
+  "chassisNo": { "x": 0.5694, "y": 0.8481 + MAIN_VALUE_Y_NUDGE_IN, "w": 1.3262, "h": 0.0811, "fontSize": 6.5 },
+  "engineNo": { "x": 0.5694, "y": 0.9268 + MAIN_VALUE_Y_NUDGE_IN, "w": 1.3173, "h": 0.0752, "fontSize": 6.5 },
+  "modelNo": { "x": 0.5694, "y": 1.0025 + MAIN_VALUE_Y_NUDGE_IN, "w": 1.3646, "h": 0.0782, "fontSize": 6 },
+  "manufacturingDt": { "x": 1.8363 + MFG_VALIDITY_X_NUDGE_IN, "y": 0.3972 + MFG_VALIDITY_Y_NUDGE_IN, "w": 0.4285, "h": 0.09, "fontSize": 6.5 },
+  "regdValidity": { "x": 2.8797 + MFG_VALIDITY_X_NUDGE_IN, "y": 0.4002 + MFG_VALIDITY_Y_NUDGE_IN, "w": 0.5962, "h": 0.0959, "fontSize": 6.5 },
   "hypothecatedTo": { "x": 1.6964, "y": 1.1218, "w": 0.9, "h": 0.09, "fontSize": 6.5 },
-  "unladenWt": { "x": 2.908, "y": 1.1653, "w": 0.597, "h": 0.0841, "fontSize": 6 },
-  "cubicCapacity": { "x": 2.9081, "y": 1.2504, "w": 0.5793, "h": 0.0723, "fontSize": 6 },
-  "wheelBase": { "x": 2.908, "y": 1.3239, "w": 0.5498, "h": 0.0752, "fontSize": 6 },
-  "rlw": { "x": 2.908, "y": 1.3973, "w": 0.5498, "h": 0.0811, "fontSize": 6 },
-  "seatCapacity": { "x": 1.6911, "y": 1.3046, "w": 0.35, "h": 0.09, "fontSize": 6.5 },
-  "standCapacity": { "x": 1.693, "y": 1.3902, "w": 0.35, "h": 0.09, "fontSize": 6.5 },
-  "noOfCyc": { "x": 2.2859, "y": 1.2957, "w": 0.35, "h": 0.09, "fontSize": 6.5 },
-  "ownerSerial": { "x": 2.2848, "y": 1.3873, "w": 0.35, "h": 0.09, "fontSize": 6.5 },
+  "unladenWt": { "x": 2.908 + SPEC_GRID_X_NUDGE_IN, "y": 1.1653 + SPEC_GRID_Y_NUDGE_IN, "w": 0.597, "h": 0.0841, "fontSize": 6 },
+  "cubicCapacity": { "x": 2.9081 + SPEC_GRID_X_NUDGE_IN, "y": 1.2504 + SPEC_GRID_Y_NUDGE_IN, "w": 0.5793, "h": 0.0723, "fontSize": 6 },
+  "wheelBase": { "x": 2.908 + SPEC_GRID_X_NUDGE_IN, "y": 1.3239 + SPEC_GRID_Y_NUDGE_IN, "w": 0.5498, "h": 0.0752, "fontSize": 6 },
+  "rlw": { "x": 2.908 + SPEC_GRID_X_NUDGE_IN, "y": 1.3973 + SPEC_GRID_Y_NUDGE_IN, "w": 0.5498, "h": 0.0811, "fontSize": 6 },
+  "seatCapacity": { "x": 1.6911 + SPEC_GRID_X_NUDGE_IN, "y": 1.3046 + SPEC_GRID_Y_NUDGE_IN, "w": 0.35, "h": 0.09, "fontSize": 6.5 },
+  "standCapacity": { "x": 1.693 + SPEC_GRID_X_NUDGE_IN, "y": 1.3902 + SPEC_GRID_Y_NUDGE_IN, "w": 0.35, "h": 0.09, "fontSize": 6.5 },
+  "noOfCyc": { "x": 2.2859 + SPEC_GRID_X_NUDGE_IN, "y": 1.2957 + SPEC_GRID_Y_NUDGE_IN, "w": 0.35, "h": 0.09, "fontSize": 6.5 },
+  "ownerSerial": { "x": 2.2848 + SPEC_GRID_X_NUDGE_IN, "y": 1.3873 + SPEC_GRID_Y_NUDGE_IN, "w": 0.35, "h": 0.09, "fontSize": 6.5 },
   "address": { "x": 1.443, "y": 1.5462, "w": 1.5004, "h": 0.2191, "fontSize": 6 },
-  "qrCode": { "x": 0.0734, "y": 1.0935, "w": 0.9954, "h": 1.0013, "fontSize": 0 },
+  "qrCode": {
+    "x": QR_CAL_BASE.x + (QR_CAL_BASE.w * (1 - QR_SCALE)) / 2,
+    "y": QR_CAL_BASE.y + (QR_CAL_BASE.h * (1 - QR_SCALE)) / 2,
+    "w": QR_CAL_BASE.w * QR_SCALE,
+    "h": QR_CAL_BASE.h * QR_SCALE,
+    "fontSize": 0,
+  },
   "issuingAuthority": { "x": 1.7278, "y": 1.88, "w": 0.7612, "h": 0.103, "fontSize": 7 },
   "signature": { "x": 2.6447, "y": 1.8643, "w": 0.8, "h": 0.12, "fontSize": 0 },
 };
