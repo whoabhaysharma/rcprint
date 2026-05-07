@@ -56,7 +56,7 @@ export default defineConfig(({mode}) => {
                   5. If any detail is missing, return "" (empty string) only. Never return placeholder text like "NO HYPOTHECATION DETAILS FOUND", "NOT FOUND", "N/A", "FALSE", or "NULL".
                   6. If hypothecation details are not present, set hypothecatedTo to "".
                   7. Extract every listed key from the document if present; do not skip fields.
-                  8. For seatCapacity, standCapacity, wheelBase, unladenWt, noOfCyc, and rlw, return only the numeric value without units like KG or MM. For cubicCapacity, return only the numeric value without CC or cc; when the certificate shows a decimal (e.g. 1248.5 or 2184.00), keep that exact decimal form — do not round to a whole number.
+                  8. For seatCapacity, standCapacity, wheelBase, unladenWt, noOfCyc, and rlw, return only the numeric value without units like KG or MM. **rlw must always be the laden weight** (Registered Laden Weight, R.L.W., or the laden column on the RC — never unladen). **unladenWt** must be the unladen weight only; do not swap or confuse the two. For cubicCapacity, return only the numeric value without CC or cc; when the certificate shows a decimal (e.g. 1248.5 or 2184.00), keep that exact decimal form — do not round to a whole number.
                   9. For ownerSerial, always return two-digit format with leading zero when single digit (1 => 01, 2 => 02, ...).
                   10. Do not use weight units like kg; include only the numeric value.
                   11. In address, include "HR " (with a space) just before the pincode.
@@ -75,7 +75,7 @@ export default defineConfig(({mode}) => {
                 const timeoutMs = 25000;
                 const response = await Promise.race([
                   ai.models.generateContent({
-                    model: "gemini-3-flash-preview",
+                    model: "gemini-3.1-flash-lite-preview",
                     contents: [
                       { inlineData: { data: payloadData, mimeType: payloadMimeType } },
                       { text: prompt }

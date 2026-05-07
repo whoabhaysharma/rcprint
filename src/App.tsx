@@ -1073,7 +1073,7 @@ function FormSection({ step, formData, onChange, onSign, signature }: any) {
       <FormInput formData={formData} onChange={onChange} label="Stand Cap" name="standCapacity" placeholder="Total" />
       <FormInput formData={formData} onChange={onChange} label="Unladen Wt" name="unladenWt" placeholder="kg" />
       <FormInput formData={formData} onChange={onChange} label="Wheelbase" name="wheelBase" placeholder="mm" />
-      <FormInput formData={formData} onChange={onChange} label="RLW" name="rlw" placeholder="kg" />
+      <FormInput formData={formData} onChange={onChange} label="RLW (laden)" name="rlw" placeholder="Laden weight kg" />
       <FormInput formData={formData} onChange={onChange} label="No. of Cyl" name="noOfCyc" placeholder="Cylinders" />
       <FormInput formData={formData} onChange={onChange} label="Owner Serial" name="ownerSerial" placeholder="e.g. 01" />
     </div>

@@ -45,7 +45,7 @@ exports.extractRc = functions.https.onRequest(async (req, res) => {
       2. Dates: Use DD-MM-YYYY for regnDate and for regdValidity when the value is a calendar date (not "As per Fitness"). For manufacturingDt only, output MM/YYYY always: two-digit month (01–12), four-digit year, slash separator (e.g. 08/2024). Normalize from whatever appears on the RC (e.g. 8/2024 → 08/2024).
       3. Names: Extract EXACTLY as written.
       4. Numbers: Extract Chassis/Engine numbers in full. For cubicCapacity, use digits only with no CC/cc suffix; when the RC shows a decimal capacity, preserve that exact decimal as printed — never round it to an integer.
-      5. Do not use weight units like kg; include only the numeric value.
+      5. Do not use weight units like kg; include only the numeric value. For **rlw** always use the **laden** weight from the RC only (Registered Laden Weight, R.L.W., "Laden", or the column that is explicitly laden / gross laden — never unladen, kerb, or empty weight). For **unladenWt** use the unladen weight only. Never swap or duplicate these values.
       6. In address, include "HR " (with a space) just before the pincode.
       7. Use temporary address, not permanent address, when both are present.
       8. Do not include any commas in address.
