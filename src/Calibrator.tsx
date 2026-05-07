@@ -21,10 +21,16 @@ const SPEC_GRID_Y_NUDGE_IN = 0.018;
 /** Match App preview: mfg + regd validity vs mockup. */
 const MFG_VALIDITY_X_NUDGE_IN = -0.028;
 const MFG_VALIDITY_Y_NUDGE_IN = 0.018;
+/** Small downward nudges to better align with background scan (card inches). */
+const REGD_VALIDITY_Y_EXTRA_IN = 0.05;
+const AUTHORITY_Y_EXTRA_IN = 0.05;
 /** Match App preview: nudge main column values down vs mockup labels. */
 const MAIN_VALUE_Y_NUDGE_IN = 0.017;
-const QR_SCALE = 1;
+/** QR render scale: anchored bottom-left, grows to top-right. */
+const QR_SCALE = 1.03;
 const QR_CAL_BASE = { x: 0.0734, y: 1.0935, w: 0.9954, h: 1.0013 } as const;
+/** Match App.tsx: QR slight right nudge on card (inches). */
+const QR_X_NUDGE_IN = 2 / 25.4;
 
 // x, y, w, h in inches; fontSize in pt
 const DEFAULT_LAYOUT: Record<string, { x: number; y: number; w: number; h: number; fontSize: number }> = {
@@ -41,7 +47,7 @@ const DEFAULT_LAYOUT: Record<string, { x: number; y: number; w: number; h: numbe
   "engineNo": { "x": 0.5694, "y": 0.9268 + MAIN_VALUE_Y_NUDGE_IN, "w": 1.3173, "h": 0.0752, "fontSize": 6.5 },
   "modelNo": { "x": 0.5694, "y": 1.0025 + MAIN_VALUE_Y_NUDGE_IN, "w": 1.3646, "h": 0.0782, "fontSize": 6 },
   "manufacturingDt": { "x": 1.8363 + MFG_VALIDITY_X_NUDGE_IN, "y": 0.3972 + MFG_VALIDITY_Y_NUDGE_IN, "w": 0.4285, "h": 0.09, "fontSize": 6.5 },
-  "regdValidity": { "x": 2.8797 + MFG_VALIDITY_X_NUDGE_IN, "y": 0.4002 + MFG_VALIDITY_Y_NUDGE_IN, "w": 0.5962, "h": 0.0959, "fontSize": 6.5 },
+  "regdValidity": { "x": 2.8797 + MFG_VALIDITY_X_NUDGE_IN, "y": 0.4002 + MFG_VALIDITY_Y_NUDGE_IN + REGD_VALIDITY_Y_EXTRA_IN, "w": 0.5962, "h": 0.0959, "fontSize": 6.5 },
   "hypothecatedTo": { "x": 1.6964, "y": 1.1218, "w": 0.9, "h": 0.135, "fontSize": 5 },
   "unladenWt": { "x": 2.908 + SPEC_GRID_X_NUDGE_IN, "y": 1.1653 + SPEC_GRID_Y_NUDGE_IN, "w": 0.597, "h": 0.0841, "fontSize": 6 },
   "cubicCapacity": { "x": 2.9081 + SPEC_GRID_X_NUDGE_IN, "y": 1.2504 + SPEC_GRID_Y_NUDGE_IN, "w": 0.5793, "h": 0.0723, "fontSize": 6 },
@@ -53,13 +59,13 @@ const DEFAULT_LAYOUT: Record<string, { x: number; y: number; w: number; h: numbe
   "ownerSerial": { "x": 2.2848 + SPEC_GRID_X_NUDGE_IN, "y": 1.3873 + SPEC_GRID_Y_NUDGE_IN, "w": 0.35, "h": 0.09, "fontSize": 6.5 },
   "address": { "x": 1.443, "y": 1.5462, "w": 1.5004, "h": 0.2191, "fontSize": 6 },
   "qrCode": {
-    "x": QR_CAL_BASE.x + (QR_CAL_BASE.w * (1 - QR_SCALE)) / 2,
-    "y": QR_CAL_BASE.y + (QR_CAL_BASE.h * (1 - QR_SCALE)) / 2,
+    "x": QR_CAL_BASE.x + QR_X_NUDGE_IN,
+    "y": QR_CAL_BASE.y,
     "w": QR_CAL_BASE.w * QR_SCALE,
     "h": QR_CAL_BASE.h * QR_SCALE,
     "fontSize": 0,
   },
-  "issuingAuthority": { "x": 1.7278, "y": 1.88, "w": 0.7612, "h": 0.103, "fontSize": 7 },
+  "issuingAuthority": { "x": 1.7278, "y": 1.88 + AUTHORITY_Y_EXTRA_IN, "w": 0.7612, "h": 0.103, "fontSize": 7 },
   "signature": { "x": 2.6447, "y": 1.8643, "w": 0.8, "h": 0.12, "fontSize": 0 },
 };
 

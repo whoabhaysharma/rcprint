@@ -20,6 +20,7 @@ import { auth, provider, db } from './firebase';
 import { signInWithPopup, onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import Calibrator from './Calibrator';
+import rcPreviewBgImage from './image.jpg';
 
 
 // PDF.js worker setup
@@ -127,6 +128,9 @@ const TEMPLATE_STORAGE_KEY = 'rc_global_template_layout';
 /** Mfg date + regd validity: toward mockup labels (card inches). */
 const MFG_VALIDITY_X_NUDGE_IN = -0.028;
 const MFG_VALIDITY_Y_NUDGE_IN = 0.018;
+/** Small downward nudges to better align with background scan (card inches). */
+const REGD_VALIDITY_Y_EXTRA_IN = 0.05;
+const AUTHORITY_Y_EXTRA_IN = 0.05;
 /** ~1 cm extra to the right for "As per Fitness" vs prior long-text anchor (inches on card). */
 const REGD_VALIDITY_LONG_TEXT_X = 2.58 + 1 / 2.54 + MFG_VALIDITY_X_NUDGE_IN;
 /** Points smaller than the field's resolved font size for long "As per Fitness" text. */
@@ -138,7 +142,10 @@ const SPEC_GRID_Y_NUDGE_IN = 0.018;
 const MAIN_VALUE_Y_NUDGE_IN = 0.017;
 /** QR plate ~4.5% smaller, centered in prior box. */
 const QR_LAYOUT_BASE = { x: 0.0553, y: 1.0935, w: 0.9894, h: 0.905 } as const;
-const QR_SCALE = 0.955;
+/** QR render scale: anchored bottom-left, grows to top-right. */
+const QR_SCALE = 1.03;
+/** QR block slight right nudge on card (inches). */
+const QR_X_NUDGE_IN = 2 / 25.4;
 const DEFAULT_TEMPLATE_LAYOUT: Record<string, Partial<{ x: number; y: number; w: number; h: number; fontSize: number; bold: boolean }>> = {
   regnNo: { x: 0.5537, y: 0.0421 + MAIN_VALUE_Y_NUDGE_IN, w: 0.8292, h: 0.1301, fontSize: 5 },
   regdOwner: { x: 0.5523, y: 0.1265 + MAIN_VALUE_Y_NUDGE_IN, fontSize: 5 },
@@ -163,14 +170,14 @@ const DEFAULT_TEMPLATE_LAYOUT: Record<string, Partial<{ x: number; y: number; w:
   rlw: { x: 2.9501 + SPEC_GRID_X_NUDGE_IN, y: 1.3733 + SPEC_GRID_Y_NUDGE_IN, w: 0.3271, h: 0.0992, fontSize: 5 },
   hypothecatedTo: { x: 1.6964, y: 1.1218, w: 0.9, h: 0.135, fontSize: 5 },
   address: { x: 1.4731, y: 1.5582, fontSize: 5 },
-  issuingAuthority: { x: 1.463, y: 1.868, fontSize: 5 },
+  issuingAuthority: { x: 1.463, y: 1.868 + AUTHORITY_Y_EXTRA_IN, fontSize: 5 },
   qrCode: {
-    x: QR_LAYOUT_BASE.x + (QR_LAYOUT_BASE.w * (1 - QR_SCALE)) / 2,
-    y: QR_LAYOUT_BASE.y + (QR_LAYOUT_BASE.h * (1 - QR_SCALE)) / 2,
+    x: QR_LAYOUT_BASE.x + QR_X_NUDGE_IN,
+    y: QR_LAYOUT_BASE.y,
     w: QR_LAYOUT_BASE.w * QR_SCALE,
     h: QR_LAYOUT_BASE.h * QR_SCALE,
   },
-  regdValidity: { x: 2.9304 + MFG_VALIDITY_X_NUDGE_IN, y: 0.3701 + MFG_VALIDITY_Y_NUDGE_IN, w: 0.4397, h: 0.132, fontSize: 5 },
+  regdValidity: { x: 2.9304 + MFG_VALIDITY_X_NUDGE_IN, y: 0.3701 + MFG_VALIDITY_Y_NUDGE_IN + REGD_VALIDITY_Y_EXTRA_IN, w: 0.4397, h: 0.132, fontSize: 5 },
 };
 
 const sanitizeExtractedValue = (value: unknown): string => {
@@ -652,7 +659,7 @@ function CardPreview({
     { key: 'engineNo',        dx: 0.5694, dy: 0.9268 + MAIN_VALUE_Y_NUDGE_IN, dw: 1.3173, dh: 0.0752, dSize: 6.5,              value: data.engineNo },
     { key: 'modelNo',         dx: 0.5694, dy: 1.0025 + MAIN_VALUE_Y_NUDGE_IN, dw: 1.3646, dh: 0.0782, dSize: 6,   bold: true,  value: data.modelNo },
     { key: 'manufacturingDt', dx: 1.8363 + MFG_VALIDITY_X_NUDGE_IN, dy: 0.3972 + MFG_VALIDITY_Y_NUDGE_IN, dw: 0.4285, dh: 0.09, dSize: 6.5,              value: data.manufacturingDt },
-    { key: 'regdValidity',    dx: 2.8797 + MFG_VALIDITY_X_NUDGE_IN, dy: 0.4002 + MFG_VALIDITY_Y_NUDGE_IN, dw: 0.5962, dh: 0.0959, dSize: 6.5,              value: data.regdValidity },
+    { key: 'regdValidity',    dx: 2.8797 + MFG_VALIDITY_X_NUDGE_IN, dy: 0.4002 + MFG_VALIDITY_Y_NUDGE_IN + REGD_VALIDITY_Y_EXTRA_IN, dw: 0.5962, dh: 0.0959, dSize: 6.5,              value: data.regdValidity },
     { key: 'hypothecatedTo',  dx: 1.6964, dy: 1.1218, dw: 0.9, dh: 0.135, dSize: 5,   bold: true,  value: hypothecatedValueForCard(String(data.hypothecatedTo || '')) },
     { key: 'unladenWt',       dx: 2.908 + SPEC_GRID_X_NUDGE_IN, dy: 1.1653 + SPEC_GRID_Y_NUDGE_IN, dw: 0.597, dh: 0.0841, dSize: 6,                value: data.unladenWt },
     { key: 'cubicCapacity',   dx: 2.9081 + SPEC_GRID_X_NUDGE_IN, dy: 1.2504 + SPEC_GRID_Y_NUDGE_IN, dw: 0.5793, dh: 0.0723, dSize: 6,                value: data.cubicCapacity },
@@ -663,8 +670,8 @@ function CardPreview({
     { key: 'noOfCyc',         dx: 2.2859 + SPEC_GRID_X_NUDGE_IN, dy: 1.2957 + SPEC_GRID_Y_NUDGE_IN, dw: 0.35, dh: 0.09, dSize: 6.5,              value: data.noOfCyc },
     { key: 'ownerSerial',     dx: 2.2848 + SPEC_GRID_X_NUDGE_IN, dy: 1.3873 + SPEC_GRID_Y_NUDGE_IN, dw: 0.35, dh: 0.09, dSize: 6.5,              value: data.ownerSerial },
     { key: 'address',         dx: 1.443, dy: 1.5462, dw: 1.5004, dh: 0.2191, dSize: 6,                value: data.address },
-    { key: 'issuingAuthority',dx: 1.7278, dy: 1.88, dw: 0.7612, dh: 0.103, dSize: 7,   bold: true,  value: data.issuingAuthority },
-    { key: 'qrCode',          dx: 0.0734 + (0.9954 * (1 - QR_SCALE)) / 2, dy: 1.0935 + (1.0013 * (1 - QR_SCALE)) / 2, dw: 0.9954 * QR_SCALE, dh: 1.0013 * QR_SCALE, dSize: 0,   isQR: true,  value: '' },
+    { key: 'issuingAuthority',dx: 1.7278, dy: 1.88 + AUTHORITY_Y_EXTRA_IN, dw: 0.7612, dh: 0.103, dSize: 7,   bold: true,  value: data.issuingAuthority },
+    { key: 'qrCode',          dx: 0.0734 + QR_X_NUDGE_IN, dy: 1.0935, dw: 0.9954 * QR_SCALE, dh: 1.0013 * QR_SCALE, dSize: 0,   isQR: true,  value: '' },
     { key: 'signature',       dx: 2.6447, dy: 1.8643, dw: 0.8, dh: 0.12, dSize: 0,   isSig: true, value: '' },
   ];
 
@@ -781,10 +788,20 @@ function CardPreview({
             setFontSizingField(null);
           }}
         >
+          {/* Background scan image (preview only) */}
+          <img
+            src={rcPreviewBgImage}
+            alt=""
+            width={PREVIEW_W}
+            height={PREVIEW_H}
+            className="absolute inset-0 z-0 block h-full w-full object-cover pointer-events-none select-none"
+            draggable={false}
+            aria-hidden
+          />
           <img
             src={CARD_MOCKUP_URL}
             alt="RC card mockup"
-            className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+            className="absolute inset-0 z-[1] w-full h-full object-cover pointer-events-none"
             draggable={false}
             crossOrigin="anonymous"
           />
