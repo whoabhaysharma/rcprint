@@ -23,7 +23,7 @@ const MFG_VALIDITY_X_NUDGE_IN = -0.028;
 const MFG_VALIDITY_Y_NUDGE_IN = 0.018;
 /** Match App preview: nudge main column values down vs mockup labels. */
 const MAIN_VALUE_Y_NUDGE_IN = 0.017;
-const QR_SCALE = 0.955;
+const QR_SCALE = 1;
 const QR_CAL_BASE = { x: 0.0734, y: 1.0935, w: 0.9954, h: 1.0013 } as const;
 
 // x, y, w, h in inches; fontSize in pt

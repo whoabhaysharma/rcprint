@@ -127,7 +127,10 @@ const TEMPLATE_STORAGE_KEY = 'rc_global_template_layout';
 /** Mfg date + regd validity: toward mockup labels (card inches). */
 const MFG_VALIDITY_X_NUDGE_IN = -0.028;
 const MFG_VALIDITY_Y_NUDGE_IN = 0.018;
-const REGD_VALIDITY_LONG_TEXT_X = 2.58 + MFG_VALIDITY_X_NUDGE_IN;
+/** ~1 cm extra to the right for "As per Fitness" vs prior long-text anchor (inches on card). */
+const REGD_VALIDITY_LONG_TEXT_X = 2.58 + 1 / 2.54 + MFG_VALIDITY_X_NUDGE_IN;
+/** Points smaller than the field's resolved font size for long "As per Fitness" text. */
+const REGD_VALIDITY_LONG_FONT_SUB_PT = 0.75;
 /** Seat/stand/cyl/serial + unladen/CC/wheelbase/RLW vs mockup (card inches). */
 const SPEC_GRID_X_NUDGE_IN = -0.028;
 const SPEC_GRID_Y_NUDGE_IN = 0.018;
@@ -177,11 +180,24 @@ const sanitizeExtractedValue = (value: unknown): string => {
 
 /** RC hypothecation line: bank / financier name only; hard cap for card layout. */
 const HYPO_BANK_MAX_LEN = 30;
+/** Preview / print: wrap into lines of at most this many characters. */
+const HYPO_CHARS_PER_LINE = 13;
 
 const clampHypothecatedTo = (raw: string): string => {
   const s = raw.replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
   if (!s) return '';
   return s.length <= HYPO_BANK_MAX_LEN ? s : s.slice(0, HYPO_BANK_MAX_LEN).trimEnd();
+};
+
+/** Card overlay: clamp then insert newlines every HYPO_CHARS_PER_LINE (for nowrap / pre-line boxes). */
+const hypothecatedValueForCard = (raw: string): string => {
+  const s = clampHypothecatedTo(raw);
+  if (!s) return '';
+  const lines: string[] = [];
+  for (let i = 0; i < s.length; i += HYPO_CHARS_PER_LINE) {
+    lines.push(s.slice(i, i + HYPO_CHARS_PER_LINE));
+  }
+  return lines.join('\n');
 };
 
 /** Maps API JSON to form fields: trim strings; numbers coerced where needed; hypothec capped. */
@@ -637,7 +653,7 @@ function CardPreview({
     { key: 'modelNo',         dx: 0.5694, dy: 1.0025 + MAIN_VALUE_Y_NUDGE_IN, dw: 1.3646, dh: 0.0782, dSize: 6,   bold: true,  value: data.modelNo },
     { key: 'manufacturingDt', dx: 1.8363 + MFG_VALIDITY_X_NUDGE_IN, dy: 0.3972 + MFG_VALIDITY_Y_NUDGE_IN, dw: 0.4285, dh: 0.09, dSize: 6.5,              value: data.manufacturingDt },
     { key: 'regdValidity',    dx: 2.8797 + MFG_VALIDITY_X_NUDGE_IN, dy: 0.4002 + MFG_VALIDITY_Y_NUDGE_IN, dw: 0.5962, dh: 0.0959, dSize: 6.5,              value: data.regdValidity },
-    { key: 'hypothecatedTo',  dx: 1.6964, dy: 1.1218, dw: 0.9, dh: 0.135, dSize: 5,   bold: true,  value: clampHypothecatedTo(String(data.hypothecatedTo || '')) },
+    { key: 'hypothecatedTo',  dx: 1.6964, dy: 1.1218, dw: 0.9, dh: 0.135, dSize: 5,   bold: true,  value: hypothecatedValueForCard(String(data.hypothecatedTo || '')) },
     { key: 'unladenWt',       dx: 2.908 + SPEC_GRID_X_NUDGE_IN, dy: 1.1653 + SPEC_GRID_Y_NUDGE_IN, dw: 0.597, dh: 0.0841, dSize: 6,                value: data.unladenWt },
     { key: 'cubicCapacity',   dx: 2.9081 + SPEC_GRID_X_NUDGE_IN, dy: 1.2504 + SPEC_GRID_Y_NUDGE_IN, dw: 0.5793, dh: 0.0723, dSize: 6,                value: data.cubicCapacity },
     { key: 'wheelBase',       dx: 2.908 + SPEC_GRID_X_NUDGE_IN, dy: 1.3239 + SPEC_GRID_Y_NUDGE_IN, dw: 0.5498, dh: 0.0752, dSize: 6,                value: data.wheelBase },
@@ -660,13 +676,17 @@ function CardPreview({
     const baseX = p?.x ?? templateDefaults.x ?? f.dx;
     const validityValue = (data.regdValidity || '').trim().toLowerCase();
     const isLongValidity = f.key === 'regdValidity' && validityValue.startsWith('as per fitness');
+    const baseSize = p?.fontSize ?? templateDefaults.fontSize ?? f.dSize;
+    const size = isLongValidity
+      ? Math.max(4, +(baseSize - REGD_VALIDITY_LONG_FONT_SUB_PT).toFixed(1))
+      : baseSize;
     return { 
       ...f, 
       x: isLongValidity ? REGD_VALIDITY_LONG_TEXT_X : baseX, 
       y: p?.y ?? templateDefaults.y ?? f.dy, 
       w: p?.w ?? templateDefaults.w ?? f.dw, 
       h: p?.h ?? templateDefaults.h ?? f.dh, 
-      size: p?.fontSize ?? templateDefaults.fontSize ?? f.dSize,
+      size,
       bold: !(f.isQR || f.isSig),
     };
   });
@@ -859,9 +879,9 @@ function CardPreview({
                 fontSize: `${(f.size / 72) * PREVIEW_PPI}px`, 
                 color: '#111', 
                 fontFamily: 'Arial, Helvetica, sans-serif',
-                whiteSpace: f.key === 'address' ? 'pre-line' : 'nowrap',
+                whiteSpace: f.key === 'address' || f.key === 'hypothecatedTo' ? 'pre-line' : 'nowrap',
                 letterSpacing: '0.02em',
-                lineHeight: f.key === 'address' ? '1.15' : '1',
+                lineHeight: f.key === 'address' || f.key === 'hypothecatedTo' ? '1.15' : '1',
                 border: isLayoutEditing ? `1px dashed ${selectedField === f.key ? '#0f172a' : '#64748b'}` : 'none',
                 background: isLayoutEditing ? 'rgba(255,255,255,0.2)' : 'transparent',
               }}
@@ -993,9 +1013,9 @@ function CardPreview({
                 fontWeight: 700,
                 color: '#111',
                 textTransform: 'none',
-                whiteSpace: f.key === 'address' ? 'pre-line' : 'nowrap',
+                whiteSpace: f.key === 'address' || f.key === 'hypothecatedTo' ? 'pre-line' : 'nowrap',
                 letterSpacing: '0.03em',
-                lineHeight: f.key === 'address' ? '1.15' : '1',
+                lineHeight: f.key === 'address' || f.key === 'hypothecatedTo' ? '1.15' : '1',
               }}>
               {f.value}
             </div>
