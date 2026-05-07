@@ -10,7 +10,7 @@ import {
   RotateCcw, Upload, ClipboardCheck, Car, User, Settings,
   ShieldCheck, MapPin, Sparkles, Edit3, CheckCircle2,
   AlertCircle, ChevronRight, ChevronLeft, Search, Printer,
-  ZoomIn, ZoomOut, Sliders
+  ZoomIn, ZoomOut, Sliders, List, LayoutGrid
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as pdfjsLib from 'pdfjs-dist';
@@ -20,7 +20,10 @@ import { auth, provider, db } from './firebase';
 import { signInWithPopup, onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import Calibrator from './Calibrator';
+import BatchUpload from './BatchUpload';
+import BatchListView from './BatchListView';
 import rcPreviewBgImage from './image.jpg';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
 
 
 // PDF.js worker setup
@@ -117,7 +120,7 @@ const initialData: FormData = {
 };
 
 type AppMode = 'manual' | 'auto';
-type AppView = 'mode-selection' | 'form' | 'preview' | 'success';
+type AppView = 'mode-selection' | 'form' | 'preview' | 'success' | 'batch-upload' | 'batch-list';
 
 const CARD_WIDTH_MM = 85.6;
 const CARD_HEIGHT_MM = 53.98;
@@ -240,6 +243,8 @@ export default function App() {
   const [layoutResetTick, setLayoutResetTick] = useState(0);
   const [templateSaveTick, setTemplateSaveTick] = useState(0);
   const [templateSaved, setTemplateSaved] = useState(false);
+  const [selectedBatchSubmissionId, setSelectedBatchSubmissionId] = useState<string | null>(null);
+  const [isBatchEditMode, setIsBatchEditMode] = useState(false);
   const qrRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -323,6 +328,26 @@ export default function App() {
     }
   };
 
+  const loadBatchSubmission = async (submissionId: string) => {
+    try {
+      const docRef = doc(db, 'batchSubmissions', submissionId);
+      const docSnap = await getDoc(docRef);
+      
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.extractedData) {
+          setFormData({ ...initialData, ...data.extractedData });
+        }
+        setSelectedBatchSubmissionId(submissionId);
+        setIsBatchEditMode(true);
+        setView('preview');
+      }
+    } catch (error) {
+      console.error('Error loading batch submission:', error);
+      alert('Failed to load submission data');
+    }
+  };
+
   const generatePDF = async () => {
     setIsGenerating(true);
     try {
@@ -345,17 +370,37 @@ export default function App() {
       element.style.cssText = originalStyle;
 
       const imgData = canvas.toDataURL('image/png');
-      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-      doc.addImage(imgData, 'PNG', 0, 0, 210, 297);
-      doc.save(`RC_${formData.regnNo || 'Vehicle'}.pdf`);
+      const pdfDoc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      pdfDoc.addImage(imgData, 'PNG', 0, 0, 210, 297);
+      pdfDoc.save(`RC_${formData.regnNo || 'Vehicle'}.pdf`);
       
-      await addDoc(collection(db, 'registrations'), {
-        ...formData,
-        hypothecatedTo: clampHypothecatedTo(formData.hypothecatedTo || ''),
-        userId: user!.uid,
-        userEmail: user!.email,
-        createdAt: serverTimestamp(),
-      });
+      if (isBatchEditMode && selectedBatchSubmissionId) {
+        // Update batch submission
+        const submissionRef = doc(db, 'batchSubmissions', selectedBatchSubmissionId);
+        await updateDoc(submissionRef, {
+          extractedData: formData,
+          updatedAt: serverTimestamp(),
+        });
+        // Also save to registrations collection
+        await addDoc(collection(db, 'registrations'), {
+          ...formData,
+          hypothecatedTo: clampHypothecatedTo(formData.hypothecatedTo || ''),
+          userId: user!.uid,
+          userEmail: user!.email,
+          batchSubmissionId: selectedBatchSubmissionId,
+          createdAt: serverTimestamp(),
+        });
+      } else {
+        // Single PDF mode - save to registrations only
+        await addDoc(collection(db, 'registrations'), {
+          ...formData,
+          hypothecatedTo: clampHypothecatedTo(formData.hypothecatedTo || ''),
+          userId: user!.uid,
+          userEmail: user!.email,
+          createdAt: serverTimestamp(),
+        });
+      }
+      
       setView('success');
       confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
     } catch (error) {
@@ -417,18 +462,34 @@ export default function App() {
 
         <AnimatePresence mode="wait">
           {view === 'mode-selection' ? (
-            <motion.div key="selection" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="max-w-4xl mx-auto space-y-12 py-24 px-6 mt-12">
+            <motion.div key="selection" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="max-w-5xl mx-auto space-y-12 py-24 px-6 mt-12">
               <div className="text-center space-y-4">
                 <h1 className="text-5xl font-black tracking-tight text-slate-900">Vehicle Enrollment</h1>
-                <p className="text-slate-400 font-medium text-lg leading-relaxed text-center mx-auto max-w-sm">Scan RC or enter details manually.</p>
+                <p className="text-slate-400 font-medium text-lg leading-relaxed text-center mx-auto max-w-sm">Choose how you want to process RC documents</p>
               </div>
-              <div className="max-w-xl mx-auto relative h-[300px]">
-                <input type="file" accept="application/pdf,image/*" onChange={handlePdfUpload} disabled={isExtracting} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
-                <div className="w-full h-full flex flex-col items-center justify-center p-12 text-center rounded-[3rem] border-[3px] border-dashed border-blue-200 bg-blue-50">
-                  <Upload size={40} className="text-blue-600 mb-4" />
-                  <h3 className="text-2xl font-black text-slate-900">Drop RC File Here</h3>
+              
+              <div className="grid grid-cols-2 gap-6 max-w-3xl mx-auto">
+                <div className="relative h-[300px] group">
+                  <input type="file" accept="application/pdf,image/*" onChange={handlePdfUpload} disabled={isExtracting} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
+                  <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center rounded-[2.5rem] border-[3px] border-dashed border-blue-200 bg-blue-50 group-hover:bg-blue-100 transition-all">
+                    <Upload size={40} className="text-blue-600 mb-4" />
+                    <h3 className="text-xl font-black text-slate-900 mb-2">Single RC Upload</h3>
+                    <p className="text-sm text-slate-500 font-medium">Process one document instantly</p>
+                  </div>
                 </div>
+
+                <button 
+                  onClick={() => setView('batch-list')}
+                  className="relative h-[300px] group"
+                >
+                  <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center rounded-[2.5rem] border-[3px] border-dashed border-green-200 bg-green-50 group-hover:bg-green-100 transition-all">
+                    <LayoutGrid size={40} className="text-green-600 mb-4" />
+                    <h3 className="text-xl font-black text-slate-900 mb-2">Batch Processing</h3>
+                    <p className="text-sm text-slate-500 font-medium">Upload up to 50 PDFs at once</p>
+                  </div>
+                </button>
               </div>
+
               <div className="text-center flex items-center justify-center gap-6">
                 <button onClick={() => setView('form')} className="text-slate-400 font-black uppercase tracking-widest text-sm hover:text-slate-900">Enter Details Manually &rarr;</button>
                 <span className="text-slate-200">|</span>
@@ -437,14 +498,37 @@ export default function App() {
                 </button>
               </div>
             </motion.div>
+          ) : view === 'batch-upload' ? (
+            <BatchUpload user={user!} onComplete={() => setView('batch-list')} />
+          ) : view === 'batch-list' ? (
+            <BatchListView 
+              user={user!} 
+              onSelectSubmission={(id) => loadBatchSubmission(id)}
+              onNewBatch={() => setView('batch-upload')}
+            />
           ) : view === 'form' || view === 'preview' ? (
             <motion.div key="workspace" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col lg:flex-row h-screen overflow-hidden bg-[#FBFBFC]">
               <div className="lg:w-[460px] w-full h-full overflow-y-auto bg-white border-r border-slate-100 p-8 space-y-12 pb-44 no-print custom-scrollbar">
                 <div className="flex items-center justify-between sticky top-0 bg-white/95 backdrop-blur-xl z-50 py-4 -translate-y-4 border-b border-slate-50">
-                  <button onClick={() => setView('mode-selection')} className="text-slate-400 hover:text-slate-900 flex items-center gap-2 font-black uppercase text-[10px] tracking-widest bg-slate-50 px-4 py-2.5 rounded-xl border border-transparent">
+                  <button 
+                    onClick={() => {
+                      if (isBatchEditMode) {
+                        setIsBatchEditMode(false);
+                        setSelectedBatchSubmissionId(null);
+                        setFormData(initialData);
+                        setSignature(null);
+                        setView('batch-list');
+                      } else {
+                        setView('mode-selection');
+                      }
+                    }} 
+                    className="text-slate-400 hover:text-slate-900 flex items-center gap-2 font-black uppercase text-[10px] tracking-widest bg-slate-50 px-4 py-2.5 rounded-xl border border-transparent"
+                  >
                     <RotateCcw size={14} /> Back
                   </button>
-                  <span className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-600">Unified Registry</span>
+                  <span className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-600">
+                    {isBatchEditMode ? 'Batch Edit' : 'Unified Registry'}
+                  </span>
                 </div>
                 <div className="space-y-16">
                   <FormSection step={0} formData={formData} onChange={handleInputChange} />
@@ -495,7 +579,28 @@ export default function App() {
                   >
                     <Printer size={22} />
                   </button>
-                  <button onClick={generatePDF} disabled={isGenerating} className="flex-1 h-16 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest shadow-xl flex items-center justify-center gap-4 hover:bg-blue-700">
+                  {isBatchEditMode && (
+                    <button 
+                      onClick={async () => {
+                        if (!selectedBatchSubmissionId) return;
+                        try {
+                          const submissionRef = doc(db, 'batchSubmissions', selectedBatchSubmissionId);
+                          await updateDoc(submissionRef, {
+                            extractedData: formData,
+                            updatedAt: serverTimestamp(),
+                          });
+                          alert('Changes saved successfully!');
+                        } catch (error) {
+                          console.error('Error saving:', error);
+                          alert('Failed to save changes');
+                        }
+                      }}
+                      className="px-6 h-16 bg-slate-100 text-slate-700 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-slate-200 transition-all"
+                    >
+                      Save
+                    </button>
+                  )}
+                  <button onClick={generatePDF} disabled={isGenerating} className="flex-1 h-16 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest shadow-xl flex items-center justify-center gap-4 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
                     {isGenerating ? 'Generating...' : 'Download Official RC'}
                   </button>
                 </div>
@@ -570,7 +675,22 @@ export default function App() {
                 <CheckCircle2 size={48} />
               </div>
               <h2 className="text-4xl font-black mb-4 text-slate-900">All Set!</h2>
-              <button onClick={() => { setView('mode-selection'); setFormData(initialData); setSignature(null); }} className="w-full py-6 bg-slate-900 text-white rounded-[2rem] font-black uppercase tracking-widest hover:bg-black transition-all">Start New Enrollment</button>
+              <button 
+                onClick={() => { 
+                  setFormData(initialData); 
+                  setSignature(null); 
+                  if (isBatchEditMode) {
+                    setIsBatchEditMode(false);
+                    setSelectedBatchSubmissionId(null);
+                    setView('batch-list');
+                  } else {
+                    setView('mode-selection');
+                  }
+                }} 
+                className="w-full py-6 bg-slate-900 text-white rounded-[2rem] font-black uppercase tracking-widest hover:bg-black transition-all"
+              >
+                {isBatchEditMode ? 'Back to Batch List' : 'Start New Enrollment'}
+              </button>
             </motion.div>
           ) : null}
         </AnimatePresence>

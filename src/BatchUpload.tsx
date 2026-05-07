@@ -1,0 +1,289 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useState } from 'react';
+import { Upload, FileText, X, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { storage, db } from './firebase';
+import type { User as FirebaseUser } from 'firebase/auth';
+
+interface BatchUploadProps {
+  user: FirebaseUser;
+  onComplete: () => void;
+}
+
+interface FileWithPreview {
+  file: File;
+  id: string;
+  status: 'pending' | 'uploading' | 'uploaded' | 'error';
+  error?: string;
+}
+
+const MAX_FILES = 50;
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+
+export default function BatchUpload({ user, onComplete }: BatchUploadProps) {
+  const [files, setFiles] = useState<FileWithPreview[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(e.target.files || []);
+    
+    if (selectedFiles.length + files.length > MAX_FILES) {
+      alert(`You can only upload up to ${MAX_FILES} files at a time`);
+      return;
+    }
+
+    const validFiles: FileWithPreview[] = [];
+    const errors: string[] = [];
+
+    selectedFiles.forEach((file) => {
+      if (file.type !== 'application/pdf') {
+        errors.push(`${file.name}: Only PDF files are allowed`);
+        return;
+      }
+      if (file.size > MAX_FILE_SIZE) {
+        errors.push(`${file.name}: File size exceeds 10MB`);
+        return;
+      }
+      validFiles.push({
+        file,
+        id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        status: 'pending',
+      });
+    });
+
+    if (errors.length > 0) {
+      alert(errors.join('\n'));
+    }
+
+    setFiles((prev) => [...prev, ...validFiles]);
+  };
+
+  const removeFile = (id: string) => {
+    setFiles((prev) => prev.filter((f) => f.id !== id));
+  };
+
+  const handleUpload = async () => {
+    if (files.length === 0) return;
+
+    setIsUploading(true);
+    setUploadProgress(0);
+
+    const batchJobRef = await addDoc(collection(db, 'batchJobs'), {
+      userId: user.uid,
+      userEmail: user.email,
+      totalFiles: files.length,
+      processedFiles: 0,
+      status: 'in_progress',
+      createdAt: serverTimestamp(),
+    });
+
+    let completed = 0;
+
+    for (const fileItem of files) {
+      try {
+        setFiles((prev) =>
+          prev.map((f) => (f.id === fileItem.id ? { ...f, status: 'uploading' } : f))
+        );
+
+        const timestamp = Date.now();
+        const storageRef = ref(
+          storage,
+          `batch-pdfs/${user.uid}/${timestamp}-${fileItem.file.name}`
+        );
+        const storagePath = storageRef.fullPath;
+
+        await uploadBytes(storageRef, fileItem.file);
+        const pdfUrl = await getDownloadURL(storageRef);
+
+        await addDoc(collection(db, 'batchSubmissions'), {
+          userId: user.uid,
+          userEmail: user.email,
+          fileName: fileItem.file.name,
+          status: 'pending',
+          pdfUrl,
+          storagePath,
+          batchJobId: batchJobRef.id,
+          createdAt: serverTimestamp(),
+        });
+
+        setFiles((prev) =>
+          prev.map((f) => (f.id === fileItem.id ? { ...f, status: 'uploaded' } : f))
+        );
+
+        completed++;
+        setUploadProgress(Math.round((completed / files.length) * 100));
+      } catch (error: any) {
+        console.error(`Error uploading ${fileItem.file.name}:`, error);
+        setFiles((prev) =>
+          prev.map((f) =>
+            f.id === fileItem.id
+              ? { ...f, status: 'error', error: error.message }
+              : f
+          )
+        );
+      }
+    }
+
+    setIsUploading(false);
+    
+    setTimeout(() => {
+      onComplete();
+    }, 1500);
+  };
+
+  return (
+    <div className="min-h-screen bg-[#FDFDFD] py-12 px-6">
+      <div className="max-w-4xl mx-auto">
+        <div className="mb-8">
+          <h1 className="text-4xl font-black tracking-tight text-slate-900 mb-2">
+            Batch Upload
+          </h1>
+          <p className="text-slate-500 font-medium">
+            Upload up to {MAX_FILES} RC PDFs for processing
+          </p>
+        </div>
+
+        <div className="bg-white rounded-3xl border-2 border-slate-100 p-8 shadow-sm mb-6">
+          <div className="relative">
+            <input
+              type="file"
+              accept="application/pdf"
+              multiple
+              onChange={handleFileSelect}
+              disabled={isUploading || files.length >= MAX_FILES}
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+            />
+            <div
+              className={`w-full h-48 flex flex-col items-center justify-center rounded-2xl border-2 border-dashed transition-all ${
+                isUploading || files.length >= MAX_FILES
+                  ? 'border-slate-200 bg-slate-50 cursor-not-allowed'
+                  : 'border-blue-300 bg-blue-50 hover:bg-blue-100'
+              }`}
+            >
+              <Upload
+                size={48}
+                className={`mb-4 ${
+                  isUploading || files.length >= MAX_FILES
+                    ? 'text-slate-300'
+                    : 'text-blue-600'
+                }`}
+              />
+              <h3 className="text-xl font-black text-slate-900 mb-1">
+                {files.length >= MAX_FILES
+                  ? 'Maximum files reached'
+                  : 'Drop PDF files here'}
+              </h3>
+              <p className="text-sm text-slate-500 font-medium">
+                {files.length} / {MAX_FILES} files selected
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {files.length > 0 && (
+          <div className="bg-white rounded-3xl border-2 border-slate-100 p-6 shadow-sm mb-6">
+            <h2 className="text-lg font-black text-slate-900 mb-4">
+              Selected Files ({files.length})
+            </h2>
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              <AnimatePresence>
+                {files.map((fileItem) => (
+                  <motion.div
+                    key={fileItem.id}
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, x: -20 }}
+                    className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 border border-slate-100"
+                  >
+                    <FileText
+                      size={20}
+                      className={`flex-shrink-0 ${
+                        fileItem.status === 'uploaded'
+                          ? 'text-green-600'
+                          : fileItem.status === 'error'
+                          ? 'text-red-600'
+                          : fileItem.status === 'uploading'
+                          ? 'text-blue-600'
+                          : 'text-slate-400'
+                      }`}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-bold text-slate-900 truncate">
+                        {fileItem.file.name}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {(fileItem.file.size / 1024 / 1024).toFixed(2)} MB
+                      </p>
+                    </div>
+                    {fileItem.status === 'uploaded' && (
+                      <CheckCircle2 size={20} className="text-green-600 flex-shrink-0" />
+                    )}
+                    {fileItem.status === 'error' && (
+                      <AlertCircle size={20} className="text-red-600 flex-shrink-0" />
+                    )}
+                    {fileItem.status === 'uploading' && (
+                      <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                    )}
+                    {fileItem.status === 'pending' && !isUploading && (
+                      <button
+                        onClick={() => removeFile(fileItem.id)}
+                        className="p-1 hover:bg-slate-200 rounded-lg transition-colors flex-shrink-0"
+                      >
+                        <X size={16} className="text-slate-600" />
+                      </button>
+                    )}
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+            </div>
+          </div>
+        )}
+
+        {isUploading && (
+          <div className="bg-white rounded-3xl border-2 border-slate-100 p-6 shadow-sm mb-6">
+            <div className="mb-2 flex justify-between items-center">
+              <span className="text-sm font-bold text-slate-900">
+                Uploading files...
+              </span>
+              <span className="text-sm font-black text-blue-600">
+                {uploadProgress}%
+              </span>
+            </div>
+            <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
+              <motion.div
+                className="h-full bg-blue-600 rounded-full"
+                initial={{ width: 0 }}
+                animate={{ width: `${uploadProgress}%` }}
+                transition={{ duration: 0.3 }}
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="flex gap-4">
+          <button
+            onClick={() => onComplete()}
+            disabled={isUploading}
+            className="px-8 py-4 bg-slate-100 text-slate-700 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleUpload}
+            disabled={files.length === 0 || isUploading}
+            className="flex-1 px-8 py-4 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg"
+          >
+            {isUploading ? 'Uploading...' : `Upload ${files.length} File${files.length !== 1 ? 's' : ''}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
