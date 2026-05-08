@@ -445,7 +445,7 @@ exports.extractRc = functions.https.onRequest(async (req, res) => {
     `;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-lite",
+      model: "gemini-3-flash-preview",
       contents: {
         parts: [
           { inlineData: { data: payloadData, mimeType: payloadMimeType } },
@@ -1032,13 +1032,13 @@ async function runBatchSubmissionWorker(snap, submissionId) {
           "info",
           submissionId,
           "gemini:start",
-          `model=gemini-2.5-flash-lite timeout=${GEMINI_TIMEOUT_MS}ms`,
-          { model: "gemini-2.5-flash-lite", geminiTimeoutMs: GEMINI_TIMEOUT_MS }
+          `model=gemini-3-flash-preview timeout=${GEMINI_TIMEOUT_MS}ms`,
+          { model: "gemini-3-flash-preview", geminiTimeoutMs: GEMINI_TIMEOUT_MS }
         );
         const t1 = Date.now();
         const extractionResponse = await withTimeout("gemini_generateContent", GEMINI_TIMEOUT_MS, async () => {
           return await ai.models.generateContent({
-            model: "gemini-2.5-flash-lite",
+            model: "gemini-3-flash-preview",
             contents: {
               parts: [
                 { inlineData: { data: base64Data, mimeType: 'application/pdf' } },

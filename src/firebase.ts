@@ -31,8 +31,11 @@ const useProductionFirebase =
   import.meta.env.VITE_USE_PRODUCTION_FIREBASE === 'true' ||
   import.meta.env.VITE_USE_PRODUCTION_FIREBASE === '1';
 
-const useFirebaseEmulators =
-  import.meta.env.DEV && isLocalDevHost() && !useProductionFirebase;
+/**
+ * Use local emulators whenever running on localhost/127.0.0.1 unless explicitly forced to production.
+ * This allows the Hosting emulator (:5000) to work too (it serves a production build where DEV=false).
+ */
+const useFirebaseEmulators = isLocalDevHost() && !useProductionFirebase;
 
 if (useFirebaseEmulators) {
   try {

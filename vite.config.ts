@@ -121,7 +121,7 @@ export default defineConfig(({mode}) => {
                 const timeoutMs = 25000;
                 const response = await Promise.race([
                   ai.models.generateContent({
-                    model: "gemini-2.5-flash-lite",
+                    model: "gemini-3-flash-preview",
                     contents: [
                       { inlineData: { data: payloadData, mimeType: payloadMimeType } },
                       { text: prompt }

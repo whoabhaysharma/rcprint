@@ -22,7 +22,6 @@ import BatchListView from './BatchListView';
 import { CreditHistoryDialog } from './components/CreditHistoryDialog';
 import { useMessageDialog } from './components/message-dialog';
 import { AI_EXTRACTION_CREDIT_COST } from './constants/credits';
-import rcPreviewBgImage from './image.jpg';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import {
   Dialog,
@@ -207,26 +206,27 @@ const DEFAULT_TEMPLATE_LAYOUT: Record<string, Partial<{ x: number; y: number; w:
   regdValidity: { x: 2.9304 + MFG_VALIDITY_X_NUDGE_IN, y: 0.3701 + MFG_VALIDITY_Y_NUDGE_IN + REGD_VALIDITY_Y_EXTRA_IN, w: 0.4397, h: 0.132, fontSize: 5 },
 };
 
-/** RC hypothecation line: bank / financier name only; hard cap for card layout. */
-const HYPO_BANK_MAX_LEN = 30;
-/** Preview / print: wrap into lines of at most this many characters. */
+/** Preview / print: wrap hypothecation into lines for the card overlay (display-only). */
 const HYPO_CHARS_PER_LINE = 13;
 
-const clampHypothecatedTo = (raw: string): string => {
-  const s = raw.replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
-  if (!s) return '';
-  return s.length <= HYPO_BANK_MAX_LEN ? s : s.slice(0, HYPO_BANK_MAX_LEN).trimEnd();
-};
-
-/** Card overlay: clamp then insert newlines every HYPO_CHARS_PER_LINE (for nowrap / pre-line boxes). */
+/**
+ * Display-only wrapping for the card. Does NOT trim/normalize/clamp the underlying value.
+ * Preserves existing line breaks and additionally wraps long lines every HYPO_CHARS_PER_LINE chars.
+ */
 const hypothecatedValueForCard = (raw: string): string => {
-  const s = clampHypothecatedTo(raw);
-  if (!s) return '';
-  const lines: string[] = [];
-  for (let i = 0; i < s.length; i += HYPO_CHARS_PER_LINE) {
-    lines.push(s.slice(i, i + HYPO_CHARS_PER_LINE));
+  if (!raw) return '';
+  const parts = String(raw).split(/\r?\n/);
+  const out: string[] = [];
+  for (const p of parts) {
+    if (p.length <= HYPO_CHARS_PER_LINE) {
+      out.push(p);
+      continue;
+    }
+    for (let i = 0; i < p.length; i += HYPO_CHARS_PER_LINE) {
+      out.push(p.slice(i, i + HYPO_CHARS_PER_LINE));
+    }
   }
-  return lines.join('\n');
+  return out.join('\n');
 };
 
 export default function App() {
@@ -432,7 +432,6 @@ export default function App() {
         });
         await addDoc(collection(db, 'registrations'), {
           ...formData,
-          hypothecatedTo: clampHypothecatedTo(formData.hypothecatedTo || ''),
           userId: user!.uid,
           userEmail: user!.email,
           batchSubmissionId: selectedBatchSubmissionId,
@@ -441,7 +440,6 @@ export default function App() {
       } else {
         await addDoc(collection(db, 'registrations'), {
           ...formData,
-          hypothecatedTo: clampHypothecatedTo(formData.hypothecatedTo || ''),
           userId: user!.uid,
           userEmail: user!.email,
           createdAt: serverTimestamp(),
@@ -1335,16 +1333,6 @@ function CardPreview({
             setFontSizingField(null);
           }}
         >
-          {/* Background scan image (preview only) */}
-          <img
-            src={rcPreviewBgImage}
-            alt=""
-            width={PREVIEW_W}
-            height={PREVIEW_H}
-            className="absolute inset-0 z-0 block h-full w-full object-cover pointer-events-none select-none"
-            draggable={false}
-            aria-hidden
-          />
           <img
             src={CARD_MOCKUP_URL}
             alt="RC card mockup"
@@ -1665,7 +1653,7 @@ function FormSection({ step, formData, onChange, onSign, signature }: any) {
   if (step === 4) return (
     <div className="grid grid-cols-2 gap-8">
       <FormInput formData={formData} onChange={onChange} label="Authority" name="issuingAuthority" placeholder="Per RC" />
-      <FormInput formData={formData} onChange={onChange} label="Hypothecation" name="hypothecatedTo" placeholder="Bank name (max 30 chars)" maxLength={HYPO_BANK_MAX_LEN} />
+      <FormInput formData={formData} onChange={onChange} label="Hypothecation" name="hypothecatedTo" placeholder="Per RC" />
       <div className="space-y-3">
         <label className="block text-[10px] font-black uppercase tracking-[0.25em] text-slate-400 ml-1">Signature</label>
         <div className="relative">
