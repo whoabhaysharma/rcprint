@@ -61,31 +61,58 @@ export default defineConfig(({mode}) => {
                 const ai = new GoogleGenAI({ apiKey });
                 
                 const prompt = `
-                  You are a highly accurate OCR and data extraction system for Vehicle Registration Certificates (RC).
-                  Analyze the provided image and extract all relevant vehicle information.
-                  Return a JSON object with the following keys. If a value is missing, return an empty string.
-                  Keys:
-                  regnNo, regnDate, manufacturer, fuel, vehicleClass, bodyType, chassisNo, engineNo, modelNo, regdOwner, swdOf, address, cubicCapacity, seatCapacity, standCapacity, wheelBase, unladenWt, noOfCyc, ownerSerial, taxPaidUpTo, regdValidity, colour, rlw, issuingAuthority, purpose, hypothecatedTo, manufacturingDt.
-                  
-                  CRITICAL: 
-                  1. Return ONLY the JSON object. No other text.
-                  2. Date formatting: Use DD-MM-YYYY for regnDate and for regdValidity when the value is a calendar date (not the phrase "As per Fitness"). For manufacturingDt only, output **MM/YYYY** always: two-digit month (01–12), four-digit year, slash separator (e.g. 08/2024). Read the RC and normalize to this form (e.g. 8/2024 → 08/2024, 10-2024 → 10/2024).
-                  3. Extract the Registration Number (e.g., HR26EB5601) accurately.
-                  4. Extract the Owner details and Address accurately.
-                  5. If any detail is missing, return "" (empty string) only. Never return placeholder text like "NO HYPOTHECATION DETAILS FOUND", "NOT FOUND", "N/A", "FALSE", or "NULL".
-                  6. If hypothecation details are not present, set hypothecatedTo to "".
-                  7. Extract every listed key from the document if present; do not skip fields.
-                  8. For seatCapacity, standCapacity, wheelBase, unladenWt, noOfCyc, and rlw, return only the numeric value without units like KG or MM. **rlw must always be the laden weight** (Registered Laden Weight, R.L.W., or the laden column on the RC — never unladen). **unladenWt** must be the unladen weight only; do not swap or confuse the two. For cubicCapacity, return only the numeric value without CC or cc; when the certificate shows a decimal (e.g. 1248.5 or 2184.00), keep that exact decimal form — do not round to a whole number.
-                  9. For ownerSerial, always return two-digit format with leading zero when single digit (1 => 01, 2 => 02, ...).
-                  10. Do not use weight units like kg; include only the numeric value.
-                  11. In address, include "HR " (with a space) just before the pincode.
-                  12. Use temporary address, not permanent address, when both are present.
-                  13. Do not include any commas in address.
-                  14. issuingAuthority and regdValidity — output final values in JSON. The client does not reformat these (only trims whitespace).
-                      - issuingAuthority: Always output PREFIX then one space then LOCATION. LOCATION is only the issuing place. For long department lines (e.g. STATE TRANSPORT DEPARTMENT AUTHORITY - PANCHKULA), LOCATION is the place after the final hyphen or after AUTHORITY as appropriate; PREFIX is SDM unless the line begins with a short office token (RTA, RTO, DTO, ARTO, SDM, MLO, etc.). Never return the full department sentence. You may use a newline in the string if needed.
-                      - regdValidity: If issuingAuthority is RTA-type (RTA + place), set "As per Fitness". Otherwise Fitness valid upto in DD-MM-YYYY.
-                  15. hypothecatedTo: Extract only the bank/financier name (not branch address, loan numbers, or "Hypothecated to" label text). Hard limit **30 characters** — shorten with sensible abbreviations if required. Single line, no newlines.
-                  16. vehicleClass: Strip all parenthetical parts including the parentheses themselves (remove whatever appears inside (...)). Example: "MOTOR CAB (LVP)" → "Motor Cab". Title-case the remaining class text when the source is all caps.
+                  You are a highly accurate OCR + data extraction system for Indian Vehicle Registration Certificates (RC).
+                  Analyze the provided image and extract ONLY the values needed to fill our form.
+
+                  OUTPUT REQUIREMENTS
+                  - Return ONLY a single JSON object. No markdown, no code fences, no explanation.
+                  - Always return ALL keys listed below. If a value is missing/unclear, return "" (empty string).
+                  - Never invent values. Prefer "" over guessing.
+
+                  REQUIRED JSON KEYS (exact spelling):
+                  regnNo, regdOwner, swdOf, address, regnDate, manufacturingDt, regdValidity,
+                  colour, fuel, vehicleClass, bodyType, manufacturer, modelNo,
+                  chassisNo, engineNo,
+                  cubicCapacity, wheelBase, unladenWt, rlw,
+                  seatCapacity, standCapacity, noOfCyc,
+                  ownerSerial, taxPaidUpTo,
+                  hypothecatedTo, issuingAuthority, purpose
+
+                  WHERE TO FIND EACH KEY IN THE RC (use label anchors; labels may vary in spacing/case):
+                  - regnNo: "REGN. NO"/"REG NO"/"REGISTRATION NO"/"Registration Number" (often top section).
+                  - regdOwner: "OWNER NAME"/"REGISTERED OWNER"/"REGD OWNER".
+                  - swdOf: "S/W/D OF"/"S/O"/"W/O"/"D/O"/"SON OF"/"WIFE OF"/"DAUGHTER OF" — extract the person name after it.
+                  - address: use TEMPORARY/PRESENT address when both exist. "ADDRESS"/"TEMPORARY ADDRESS"/"PRESENT ADDRESS". No commas. Insert "HR " before pincode.
+                  - regnDate: "REGN DATE"/"REGISTRATION DATE"/"DATE OF REGISTRATION" → DD-MM-YYYY.
+                  - manufacturingDt: "MFG DATE"/"MONTH/YR OF MFG"/"MANUFACTURING DATE" → MM/YYYY (two-digit month).
+                  - regdValidity: if issuingAuthority starts with "RTA " + place => exactly "As per Fitness"; else use "Fitness valid upto/updo" date → DD-MM-YYYY.
+                  - colour: "COLOUR"/"COLOR".
+                  - fuel: "FUEL".
+                  - vehicleClass: "CLASS"/"VEHICLE CLASS"/"CLASS OF VEHICLE" (strip parentheses; title-case if all caps).
+                  - bodyType: "BODY TYPE"/"BODY".
+                  - manufacturer: "MAKER"/"MFR"/"MANUFACTURER"/"MAKER'S NAME" (maker/company, not dealer).
+                  - modelNo: "MODEL"/"MODEL NO"/"TRADE NAME"/"VARIANT".
+                  - chassisNo: "CHASSIS NO"/"CH. NO"/"VIN".
+                  - engineNo: "ENGINE NO"/"ENG. NO".
+                  - cubicCapacity: "C.C."/ "CUBIC CAPACITY"/"ENGINE CAPACITY" (digits only; keep decimals; no CC).
+                  - wheelBase: "WHEEL BASE"/"WHEELBASE" (digits only).
+                  - unladenWt: "UNLADEN WT"/"ULW"/"KERB WT" (digits only; no kg).
+                  - rlw: "R.L.W."/"REGISTERED LADEN WEIGHT"/"LADEN"/"GROSS LADEN" (laden only; digits only; no kg).
+                  - seatCapacity: "SEAT CAPACITY"/"NO OF SEATS" (digits only).
+                  - standCapacity: "STAND CAPACITY" (digits only).
+                  - noOfCyc: "NO OF CYL"/"CYLINDERS" (digits only).
+                  - ownerSerial: "OWNER SR"/"OWNER SERIAL"/"OWNER SL NO" (two digits: 1->01).
+                  - taxPaidUpTo: "TAX PAID UPTO/UP TO"/"TAX VALID UPTO" (output as printed).
+                  - hypothecatedTo: "HYPOTHECATED TO"/"HP TO"/"FINANCIER" — only institution name, max 30 chars, single line, else "".
+                  - issuingAuthority: "ISSUING AUTHORITY"/"REGISTERING AUTHORITY"/office line (RTA/RTO/DTO/SDM). Output:
+                      * If RC has "RTA <PLACE>" output that exactly
+                      * Otherwise "SDM <PLACE>"
+                  - purpose: "PURPOSE"/"USE"/"TYPE OF USE".
+
+                  GLOBAL NORMALIZATION RULES
+                  - Dates: regnDate & regdValidity as DD-MM-YYYY when dates.
+                  - manufacturingDt must be MM/YYYY only (normalize 8/2024 -> 08/2024; 10-2024 -> 10/2024).
+                  - Numbers: do not include units (KG/MM/CC). Extract full chassis/engine strings.
 
                   Additional User Rules to follow strictly:
                   ${customPrompt || "None"}
