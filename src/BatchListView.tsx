@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { collection, query, where, onSnapshot, QueryDocumentSnapshot, doc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { ref, deleteObject } from 'firebase/storage';
 import { db, storage } from './firebase';
@@ -11,6 +11,7 @@ import { FileText, Clock, CheckCircle2, XCircle, Edit3, Loader, Upload, RefreshC
 import { motion, AnimatePresence } from 'motion/react';
 import type { User as FirebaseUser } from 'firebase/auth';
 import type { BatchSubmission } from './types';
+import { useMessageDialog } from './components/message-dialog';
 
 const storagePathFromUrl = (pdfUrl: string | undefined): string | null => {
   if (!pdfUrl) return null;
@@ -32,6 +33,8 @@ interface BatchListViewProps {
   user: FirebaseUser;
   onSelectSubmission: (id: string) => void;
   onNewBatch: () => void;
+  /** Called when a submission reaches a terminal billing state (processed) so the header can refresh balance. */
+  onCreditsMaybeChanged?: () => void;
 }
 
 const statusConfig = {
@@ -61,7 +64,8 @@ const statusConfig = {
   },
 };
 
-export default function BatchListView({ user, onSelectSubmission, onNewBatch }: BatchListViewProps) {
+export default function BatchListView({ user, onSelectSubmission, onNewBatch, onCreditsMaybeChanged }: BatchListViewProps) {
+  const showMessage = useMessageDialog();
   const [submissions, setSubmissions] = useState<(BatchSubmission & { docId: string })[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -69,6 +73,9 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch }: 
   const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
   const [deleteConfirmation, setDeleteConfirmation] = useState<{ submission: BatchSubmission & { docId: string } } | null>(null);
+  const statusByIdRef = useRef<Record<string, string>>({});
+  const onCreditsMaybeChangedRef = useRef(onCreditsMaybeChanged);
+  onCreditsMaybeChangedRef.current = onCreditsMaybeChanged;
 
   useEffect(() => {
     const q = query(
@@ -88,9 +95,27 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch }: 
         const bMs = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
         return bMs - aMs;
       });
+
+      let shouldRefreshCredits = false;
+      const ids = new Set<string>();
+      for (const row of docs) {
+        ids.add(row.docId);
+        const prev = statusByIdRef.current[row.docId];
+        if (row.status === 'processed' && prev !== 'processed') {
+          shouldRefreshCredits = true;
+        }
+        statusByIdRef.current[row.docId] = row.status;
+      }
+      for (const k of Object.keys(statusByIdRef.current)) {
+        if (!ids.has(k)) delete statusByIdRef.current[k];
+      }
+
       setSubmissions(docs);
       setLoadError(null);
       setLoading(false);
+      if (shouldRefreshCredits) {
+        onCreditsMaybeChangedRef.current?.();
+      }
     }, (err) => {
       console.error('Failed to load batch submissions:', err);
       setLoadError(err?.message || 'Failed to load submissions');
@@ -111,7 +136,7 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch }: 
       });
     } catch (error) {
       console.error('Error retrying submission:', error);
-      alert('Failed to retry. Please try again.');
+      showMessage('Failed to retry. Please try again.', 'Retry failed');
     } finally {
       setRetryingIds(prev => {
         const next = new Set(prev);
@@ -154,7 +179,7 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch }: 
       
     } catch (error) {
       console.error('Error deleting submission:', error);
-      alert('Failed to delete. Please try again.');
+      showMessage('Failed to delete. Please try again.', 'Delete failed');
       setDeletingIds(prev => {
         const next = new Set(prev);
         next.delete(submission.docId);
@@ -177,7 +202,7 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch }: 
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#FDFDFD] flex items-center justify-center">
+      <div className="w-full min-h-[calc(100svh-3.5rem)] bg-[#FDFDFD] py-8 pb-12 px-6 flex items-center justify-center">
         <div className="text-center">
           <div className="w-16 h-16 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-4" />
           <p className="text-slate-500 font-bold">Loading submissions...</p>
@@ -188,7 +213,7 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch }: 
 
   if (loadError) {
     return (
-      <div className="min-h-screen bg-[#FDFDFD] flex items-center justify-center p-6">
+      <div className="w-full min-h-[calc(100svh-3.5rem)] bg-[#FDFDFD] py-8 pb-12 px-6 flex items-center justify-center">
         <div className="bg-white rounded-3xl border-2 border-slate-100 p-10 shadow-sm max-w-xl w-full text-center">
           <h2 className="text-2xl font-black text-slate-900 mb-3">Could not load submissions</h2>
           <p className="text-slate-600 font-medium mb-6 break-words">{loadError}</p>
@@ -217,10 +242,10 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch }: 
   }
 
   return (
-    <div className="min-h-screen bg-[#FDFDFD] py-12 px-6">
+    <div className="w-full min-h-[calc(100svh-3.5rem)] bg-[#FDFDFD] py-8 pb-12 px-6">
       <div className="max-w-7xl mx-auto">
-        <div className="flex items-center justify-between mb-8">
-          <div>
+        <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0 pr-2">
             <h1 className="text-4xl font-black tracking-tight text-slate-900 mb-2">
               Batch Submissions
             </h1>
@@ -230,7 +255,7 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch }: 
           </div>
           <button
             onClick={onNewBatch}
-            className="px-6 py-3 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-blue-700 transition-all shadow-lg flex items-center gap-2"
+            className="shrink-0 px-6 py-3 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-blue-700 transition-all shadow-lg flex items-center gap-2 self-start sm:self-auto"
           >
             <Upload size={16} />
             New Batch

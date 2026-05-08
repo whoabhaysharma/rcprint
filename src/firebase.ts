@@ -19,14 +19,28 @@ export const provider = new GoogleAuthProvider();
 export const db = getFirestore(app);
 export const storage = getStorage(app);
 
-// Connect to emulators in development
-if (import.meta.env.DEV && typeof window !== 'undefined' && window.location.hostname === 'localhost') {
+/**
+ * Local dev: use the full emulator stack (must run `npm run emulators` first).
+ * Opt out with VITE_USE_PRODUCTION_FIREBASE=true if you need real Auth/Firestore/Storage.
+ */
+const isLocalDevHost = () =>
+  typeof window !== 'undefined' &&
+  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+const useProductionFirebase =
+  import.meta.env.VITE_USE_PRODUCTION_FIREBASE === 'true' ||
+  import.meta.env.VITE_USE_PRODUCTION_FIREBASE === '1';
+
+const useFirebaseEmulators =
+  import.meta.env.DEV && isLocalDevHost() && !useProductionFirebase;
+
+if (useFirebaseEmulators) {
   try {
-    connectAuthEmulator(auth, 'http://localhost:9099', { disableWarnings: true });
-    connectFirestoreEmulator(db, 'localhost', 8080);
-    connectStorageEmulator(storage, 'localhost', 9199);
-    console.log('Connected to Firebase emulators');
+    connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+    connectFirestoreEmulator(db, '127.0.0.1', 8080);
+    connectStorageEmulator(storage, '127.0.0.1', 9199);
+    console.info('[Firebase] Emulators — auth:9099 firestore:8080 storage:9199 (run `npm run emulators`)');
   } catch (error) {
-    console.warn('Firebase emulators already connected or not available');
+    console.warn('[Firebase] Emulator connect skipped or already connected', error);
   }
 }

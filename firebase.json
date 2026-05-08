@@ -14,6 +14,31 @@
         "region": "us-central1"
       },
       {
+        "source": "/api/razorpay/createOrder",
+        "function": "createRazorpayOrder",
+        "region": "us-central1"
+      },
+      {
+        "source": "/api/razorpay/verifyPayment",
+        "function": "verifyRazorpayPayment",
+        "region": "us-central1"
+      },
+      {
+        "source": "/api/credits/me",
+        "function": "getMyCredits",
+        "region": "us-central1"
+      },
+      {
+        "source": "/api/credits/history",
+        "function": "getCreditHistory",
+        "region": "us-central1"
+      },
+      {
+        "source": "/api/credits/consume",
+        "function": "consumeCredits",
+        "region": "us-central1"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }

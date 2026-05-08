@@ -10,9 +10,14 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { storage, db } from './firebase';
 import type { User as FirebaseUser } from 'firebase/auth';
+import { useMessageDialog } from './components/message-dialog';
+import { AI_EXTRACTION_CREDIT_COST } from './constants/credits';
 
 interface BatchUploadProps {
   user: FirebaseUser;
+  credits: number;
+  creditsLoading: boolean;
+  onRequestCredits: () => void;
   onComplete: () => void;
 }
 
@@ -26,16 +31,38 @@ interface FileWithPreview {
 const MAX_FILES = 50;
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
-export default function BatchUpload({ user, onComplete }: BatchUploadProps) {
+export default function BatchUpload({
+  user,
+  credits,
+  creditsLoading,
+  onRequestCredits,
+  onComplete,
+}: BatchUploadProps) {
+  const showMessage = useMessageDialog();
   const [files, setFiles] = useState<FileWithPreview[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
+  const canUseBatch =
+    !creditsLoading && credits >= AI_EXTRACTION_CREDIT_COST;
+
+  const creditsNeededForQueue = files.length * AI_EXTRACTION_CREDIT_COST;
+  const hasEnoughCreditsForQueue = credits >= creditsNeededForQueue;
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!canUseBatch) {
+      showMessage(
+        `Batch upload needs at least ${AI_EXTRACTION_CREDIT_COST} credits per PDF you queue (${AI_EXTRACTION_CREDIT_COST} credits deducted only after each file is processed successfully).`,
+        'Credits required',
+      );
+      onRequestCredits();
+      return;
+    }
+
     const selectedFiles = Array.from(e.target.files || []);
     
     if (selectedFiles.length + files.length > MAX_FILES) {
-      alert(`You can only upload up to ${MAX_FILES} files at a time`);
+      showMessage(`You can only upload up to ${MAX_FILES} files at a time.`, 'Too many files');
       return;
     }
 
@@ -58,8 +85,26 @@ export default function BatchUpload({ user, onComplete }: BatchUploadProps) {
       });
     });
 
+    if (validFiles.length === 0) {
+      if (errors.length > 0) {
+        showMessage(errors.join('\n'), 'Some files were skipped');
+      }
+      return;
+    }
+
+    const totalAfter = files.length + validFiles.length;
+    const needed = totalAfter * AI_EXTRACTION_CREDIT_COST;
+    if (credits < needed) {
+      showMessage(
+        `Each PDF needs ${AI_EXTRACTION_CREDIT_COST} credits when processing succeeds. ${totalAfter} file(s) require ${needed} credits; you have ${credits}. Remove files from the queue or buy more credits.`,
+        'Insufficient credits',
+      );
+      onRequestCredits();
+      return;
+    }
+
     if (errors.length > 0) {
-      alert(errors.join('\n'));
+      showMessage(errors.join('\n'), 'Some files were skipped');
     }
 
     setFiles((prev) => [...prev, ...validFiles]);
@@ -71,6 +116,15 @@ export default function BatchUpload({ user, onComplete }: BatchUploadProps) {
 
   const handleUpload = async () => {
     if (files.length === 0) return;
+
+    if (!canUseBatch || credits < files.length * AI_EXTRACTION_CREDIT_COST) {
+      showMessage(
+        `You need ${files.length * AI_EXTRACTION_CREDIT_COST} credits for ${files.length} file(s) (${AI_EXTRACTION_CREDIT_COST} per successful processing). You have ${credits}.`,
+        'Insufficient credits',
+      );
+      onRequestCredits();
+      return;
+    }
 
     setIsUploading(true);
     setUploadProgress(0);
@@ -139,16 +193,42 @@ export default function BatchUpload({ user, onComplete }: BatchUploadProps) {
   };
 
   return (
-    <div className="min-h-screen bg-[#FDFDFD] py-12 px-6">
+    <div className="w-full min-h-[calc(100svh-3.5rem)] bg-[#FDFDFD] py-8 pb-12 px-6">
       <div className="max-w-4xl mx-auto">
         <div className="mb-8">
           <h1 className="text-4xl font-black tracking-tight text-slate-900 mb-2">
             Batch Upload
           </h1>
           <p className="text-slate-500 font-medium">
-            Upload up to {MAX_FILES} RC PDFs for processing
+            Upload up to {MAX_FILES} RC PDFs for AI processing ({AI_EXTRACTION_CREDIT_COST} credits per file, charged only after successful extraction)
           </p>
         </div>
+
+        {creditsLoading ? (
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4 text-sm font-bold text-slate-600 mb-6">
+            Loading your credit balance…
+          </div>
+        ) : !canUseBatch ? (
+          <div className="rounded-2xl border-2 border-amber-200 bg-amber-50 px-5 py-5 mb-6">
+            <p className="text-sm font-black text-slate-900 mb-2">Credits required for batch upload</p>
+            <p className="text-sm font-medium text-slate-600 mb-4">
+              You need at least {AI_EXTRACTION_CREDIT_COST} credits per PDF in your queue. Your balance:{' '}
+              <span className="font-black tabular-nums">{credits}</span> credits.
+            </p>
+            <button
+              type="button"
+              onClick={onRequestCredits}
+              className="w-full sm:w-auto px-6 py-3 rounded-xl bg-blue-600 text-white text-xs font-black uppercase tracking-widest hover:bg-blue-700"
+            >
+              Buy credits
+            </button>
+          </div>
+        ) : files.length > 0 && !hasEnoughCreditsForQueue ? (
+          <div className="rounded-2xl border-2 border-amber-200 bg-amber-50 px-5 py-4 mb-6 text-sm font-bold text-slate-800">
+            This queue needs {creditsNeededForQueue} credits ({files.length} × {AI_EXTRACTION_CREDIT_COST}). You have {credits}.
+            Remove files or buy credits before uploading.
+          </div>
+        ) : null}
 
         <div className="bg-white rounded-3xl border-2 border-slate-100 p-8 shadow-sm mb-6">
           <div className="relative">
@@ -157,12 +237,14 @@ export default function BatchUpload({ user, onComplete }: BatchUploadProps) {
               accept="application/pdf"
               multiple
               onChange={handleFileSelect}
-              disabled={isUploading || files.length >= MAX_FILES}
+              disabled={
+                isUploading || files.length >= MAX_FILES || !canUseBatch
+              }
               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
             />
             <div
               className={`w-full h-48 flex flex-col items-center justify-center rounded-2xl border-2 border-dashed transition-all ${
-                isUploading || files.length >= MAX_FILES
+                isUploading || files.length >= MAX_FILES || !canUseBatch
                   ? 'border-slate-200 bg-slate-50 cursor-not-allowed'
                   : 'border-blue-300 bg-blue-50 hover:bg-blue-100'
               }`}
@@ -170,13 +252,15 @@ export default function BatchUpload({ user, onComplete }: BatchUploadProps) {
               <Upload
                 size={48}
                 className={`mb-4 ${
-                  isUploading || files.length >= MAX_FILES
+                  isUploading || files.length >= MAX_FILES || !canUseBatch
                     ? 'text-slate-300'
                     : 'text-blue-600'
                 }`}
               />
               <h3 className="text-xl font-black text-slate-900 mb-1">
-                {files.length >= MAX_FILES
+                {!canUseBatch
+                  ? 'Add credits to upload'
+                  : files.length >= MAX_FILES
                   ? 'Maximum files reached'
                   : 'Drop PDF files here'}
               </h3>
@@ -277,7 +361,12 @@ export default function BatchUpload({ user, onComplete }: BatchUploadProps) {
           </button>
           <button
             onClick={handleUpload}
-            disabled={files.length === 0 || isUploading}
+            disabled={
+              files.length === 0 ||
+              isUploading ||
+              !canUseBatch ||
+              !hasEnoughCreditsForQueue
+            }
             className="flex-1 px-8 py-4 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg"
           >
             {isUploading ? 'Uploading...' : `Upload ${files.length} File${files.length !== 1 ? 's' : ''}`}

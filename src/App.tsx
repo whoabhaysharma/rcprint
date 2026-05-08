@@ -3,31 +3,28 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { jsPDF } from 'jspdf';
-import { QRCodeSVG, QRCodeCanvas } from 'qrcode.react';
+import { QRCodeSVG } from 'qrcode.react';
 import {
-  RotateCcw, Upload, ClipboardCheck, Car, User, Settings,
-  ShieldCheck, MapPin, Sparkles, Edit3, CheckCircle2,
-  AlertCircle, ChevronRight, ChevronLeft, Search, Printer,
-  ZoomIn, ZoomOut, Sliders, List, LayoutGrid
+  RotateCcw, ShieldCheck, CheckCircle2, Printer,
+  ZoomIn, ZoomOut, LayoutGrid, Coins, Plus, FileText, History,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import * as pdfjsLib from 'pdfjs-dist';
 import html2canvas from 'html2canvas';
 import confetti from 'canvas-confetti';
+import { FirebaseError } from 'firebase/app';
 import { auth, provider, db } from './firebase';
-import { signInWithPopup, onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
+import { signInWithPopup, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import Calibrator from './Calibrator';
 import BatchUpload from './BatchUpload';
 import BatchListView from './BatchListView';
+import { CreditHistoryDialog } from './components/CreditHistoryDialog';
+import { useMessageDialog } from './components/message-dialog';
+import { AI_EXTRACTION_CREDIT_COST } from './constants/credits';
 import rcPreviewBgImage from './image.jpg';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 
-
-// PDF.js worker setup
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
 
 interface FormData {
   regnNo: string;
@@ -119,8 +116,29 @@ const initialData: FormData = {
   manufacturingDt: '10/2024',
 };
 
-type AppMode = 'manual' | 'auto';
 type AppView = 'mode-selection' | 'form' | 'preview' | 'success' | 'batch-upload' | 'batch-list';
+
+type RcDataSource = 'manual' | 'ai';
+
+/** Available credit packs. Keep in sync with `PLANS` in `functions/index.js`. */
+type CreditPlanInr = 100 | 299;
+const CREDIT_PLANS: ReadonlyArray<{ inr: CreditPlanInr; credits: number; label: string }> = [
+  { inr: 100, credits: 100, label: 'Starter' },
+  { inr: 299, credits: 350, label: 'Best value' },
+];
+
+const AUTH_NETWORK_USER_MSG =
+  'Could not reach Google sign-in (network). Check your internet connection, try another network or device, and pause VPN or extensions that block Google. For local development, only set VITE_USE_FIREBASE_EMULATORS=true when Firebase emulators are running.';
+
+function userFacingAuthOrNetworkError(err: unknown): string {
+  if (err instanceof FirebaseError && err.code === 'auth/network-request-failed') {
+    return AUTH_NETWORK_USER_MSG;
+  }
+  if (err instanceof Error && err.message.includes('auth/network-request-failed')) {
+    return AUTH_NETWORK_USER_MSG;
+  }
+  return err instanceof Error ? err.message : 'Something went wrong';
+}
 
 const CARD_WIDTH_MM = 85.6;
 const CARD_HEIGHT_MM = 53.98;
@@ -183,11 +201,6 @@ const DEFAULT_TEMPLATE_LAYOUT: Record<string, Partial<{ x: number; y: number; w:
   regdValidity: { x: 2.9304 + MFG_VALIDITY_X_NUDGE_IN, y: 0.3701 + MFG_VALIDITY_Y_NUDGE_IN + REGD_VALIDITY_Y_EXTRA_IN, w: 0.4397, h: 0.132, fontSize: 5 },
 };
 
-const sanitizeExtractedValue = (value: unknown): string => {
-  if (typeof value !== 'string') return '';
-  return value.trim();
-};
-
 /** RC hypothecation line: bank / financier name only; hard cap for card layout. */
 const HYPO_BANK_MAX_LEN = 30;
 /** Preview / print: wrap into lines of at most this many characters. */
@@ -210,42 +223,29 @@ const hypothecatedValueForCard = (raw: string): string => {
   return lines.join('\n');
 };
 
-/** Maps API JSON to form fields: trim strings; numbers coerced where needed; hypothec capped. */
-const normalizeExtractedData = (raw: Record<string, any>): Partial<FormData> => {
-  const normalized: Record<string, any> = {};
-  for (const key of FORM_KEYS) {
-    const v = raw[key];
-    if (key === 'cubicCapacity' && typeof v === 'number' && Number.isFinite(v)) {
-      normalized[key] = String(v);
-    } else if (key === 'hypothecatedTo') {
-      normalized[key] = clampHypothecatedTo(sanitizeExtractedValue(v));
-    } else {
-      normalized[key] = sanitizeExtractedValue(v);
-    }
-  }
-  return normalized as Partial<FormData>;
-};
-
 export default function App() {
   // ── ALL hooks must be declared before any conditional return ──
-  const [showCalibrator, setShowCalibrator] = useState(false);
+  const showMessage = useMessageDialog();
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [formData, setFormData] = useState<FormData>(initialData);
   const [view, setView] = useState<AppView>('mode-selection');
-  const [isExtracting, setIsExtracting] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isPaying, setIsPaying] = useState(false);
+  const [credits, setCredits] = useState<number>(0);
+  const [creditsLoading, setCreditsLoading] = useState(false);
+  const [showPlans, setShowPlans] = useState(false);
+  const [creditHistoryOpen, setCreditHistoryOpen] = useState(false);
   const [signature, setSignature] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
-  const [customPrompt, setCustomPrompt] = useState(() => localStorage.getItem('rcCustomPrompt') || '');
-  const [showSettings, setShowSettings] = useState(false);
   const [isLayoutEditing, setIsLayoutEditing] = useState(false);
   const [layoutResetTick, setLayoutResetTick] = useState(0);
   const [templateSaveTick, setTemplateSaveTick] = useState(0);
   const [templateSaved, setTemplateSaved] = useState(false);
   const [selectedBatchSubmissionId, setSelectedBatchSubmissionId] = useState<string | null>(null);
   const [isBatchEditMode, setIsBatchEditMode] = useState(false);
-  const qrRef = useRef<HTMLDivElement>(null);
+  /** manual = user typed data (free PDF/print); ai = extraction or batch (billed on server). */
+  const [rcDataSource, setRcDataSource] = useState<RcDataSource>('manual');
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -255,12 +255,58 @@ export default function App() {
     return unsub;
   }, []);
 
+  const refreshCredits = async (u: FirebaseUser | null) => {
+    if (!u) {
+      setCredits(0);
+      return;
+    }
+    setCreditsLoading(true);
+    try {
+      const token = await u.getIdToken();
+      const res = await fetch('/api/credits/me', {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setCredits(Number(data?.credits || 0) || 0);
+    } catch (e) {
+      console.warn('Failed to refresh credits', e);
+      setCredits(0);
+    } finally {
+      setCreditsLoading(false);
+    }
+  };
+
   useEffect(() => {
-    localStorage.setItem('rcCustomPrompt', customPrompt);
-  }, [customPrompt]);
+    void refreshCredits(user);
+  }, [user]);
+
+  useEffect(() => {
+    const el = document.documentElement;
+    if (view === 'form' || view === 'preview') {
+      el.dataset.printPolicy = rcDataSource === 'manual' ? 'manual-free' : 'ai-guard';
+    } else {
+      delete el.dataset.printPolicy;
+    }
+    return () => {
+      delete el.dataset.printPolicy;
+    };
+  }, [view, rcDataSource]);
 
   // ── Now safe to do conditional renders ──
-  if (showCalibrator) return <Calibrator onBack={() => setShowCalibrator(false)} />;
+  const goToBatchUpload = () => {
+    if (creditsLoading) return;
+    if (credits < AI_EXTRACTION_CREDIT_COST) {
+      showMessage(
+        `Batch AI processing uses ${AI_EXTRACTION_CREDIT_COST} credits per PDF after each file is processed successfully. Purchase credits to upload a batch.`,
+        'Insufficient credits',
+      );
+      setShowPlans(true);
+      return;
+    }
+    setView('batch-upload');
+  };
 
 
 
@@ -278,56 +324,6 @@ export default function App() {
     }
   };
 
-  const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setIsExtracting(true);
-    try {
-      const reader = new FileReader();
-      const dataUrl = await new Promise<string>((resolve) => {
-        reader.onload = () => resolve(reader.result as string);
-        reader.readAsDataURL(file);
-      });
-      const [meta, base64Data = ''] = dataUrl.split(',');
-      const mimeType = file.type || meta.match(/^data:(.*?);base64$/)?.[1] || 'application/octet-stream';
-
-      const res = await fetch('/api/extractRcData', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ base64Data, mimeType, customPrompt })
-      });
-
-      if (!res.ok) throw new Error('Failed to extract data: ' + await res.text());
-      const extractedData = await res.json();
-      const normalizedData = normalizeExtractedData(extractedData || {});
-      const found: Record<string, string> = {};
-      const missing: string[] = [];
-      for (const key of FORM_KEYS) {
-        const value = normalizedData[key] ?? '';
-        if (typeof value === 'string' && value.trim()) {
-          found[key] = value;
-        } else {
-          missing.push(key);
-        }
-      }
-      console.groupCollapsed('[RC Extraction] Field coverage');
-      console.log('Raw response:', extractedData);
-      console.log('Normalized response:', normalizedData);
-      console.log('Found fields:', found);
-      console.log('Missing fields:', missing);
-      console.groupEnd();
-      setFormData(prev => ({ ...prev, ...normalizedData }));
-      setView('preview');
-      confetti({ particleCount: 80, spread: 50, origin: { y: 0.8 }, colors: ['#2563eb', '#3b82f6', '#60a5fa'] });
-    } catch (error) {
-      console.error('Extraction error:', error);
-      alert('AI Extraction failed.');
-    } finally {
-      setIsExtracting(false);
-    }
-  };
-
   const loadBatchSubmission = async (submissionId: string) => {
     try {
       const docRef = doc(db, 'batchSubmissions', submissionId);
@@ -340,22 +336,32 @@ export default function App() {
         }
         setSelectedBatchSubmissionId(submissionId);
         setIsBatchEditMode(true);
+        setRcDataSource('ai');
         setView('preview');
+        void refreshCredits(user);
       }
     } catch (error) {
       console.error('Error loading batch submission:', error);
-      alert('Failed to load submission data');
+      showMessage('Failed to load submission data.', 'Error');
     }
   };
 
-  const generatePDF = async () => {
+  /**
+   * Renders the RC card to PDF, downloads it, and persists a record to Firestore.
+   * Returns `true` only if every step succeeds.
+   */
+  const generatePDF = async (): Promise<boolean> => {
     setIsGenerating(true);
+    let originalStyle: string | null = null;
+    let element: HTMLElement | null = null;
     try {
-      const element = document.getElementById('rc-a4-print');
-      if (!element) return;
+      element = document.getElementById('rc-a4-print');
+      if (!element) {
+        console.error('PDF target element not found');
+        return false;
+      }
 
-      // Temporarily make it visible to html2canvas (it can't capture display:none)
-      const originalStyle = element.style.cssText;
+      originalStyle = element.style.cssText;
       element.style.cssText = 'position:fixed; top:0; left:0; width:210mm; height:297mm; z-index:-1; display:block; background:white;';
 
       const canvas = await html2canvas(element, {
@@ -366,22 +372,20 @@ export default function App() {
         height: 1123 // ~297mm @ 96dpi
       });
 
-      // Restore hidden state
       element.style.cssText = originalStyle;
+      originalStyle = null;
 
       const imgData = canvas.toDataURL('image/png');
       const pdfDoc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
       pdfDoc.addImage(imgData, 'PNG', 0, 0, 210, 297);
       pdfDoc.save(`RC_${formData.regnNo || 'Vehicle'}.pdf`);
-      
+
       if (isBatchEditMode && selectedBatchSubmissionId) {
-        // Update batch submission
         const submissionRef = doc(db, 'batchSubmissions', selectedBatchSubmissionId);
         await updateDoc(submissionRef, {
           extractedData: formData,
           updatedAt: serverTimestamp(),
         });
-        // Also save to registrations collection
         await addDoc(collection(db, 'registrations'), {
           ...formData,
           hypothecatedTo: clampHypothecatedTo(formData.hypothecatedTo || ''),
@@ -391,7 +395,6 @@ export default function App() {
           createdAt: serverTimestamp(),
         });
       } else {
-        // Single PDF mode - save to registrations only
         await addDoc(collection(db, 'registrations'), {
           ...formData,
           hypothecatedTo: clampHypothecatedTo(formData.hypothecatedTo || ''),
@@ -400,13 +403,183 @@ export default function App() {
           createdAt: serverTimestamp(),
         });
       }
-      
-      setView('success');
-      confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
+
+      return true;
     } catch (error) {
       console.error('PDF error:', error);
+      return false;
     } finally {
+      // Always restore the off-screen styling so a retry can run cleanly.
+      if (element && originalStyle !== null) {
+        element.style.cssText = originalStyle;
+      }
       setIsGenerating(false);
+    }
+  };
+
+  const payAndDownload = async () => {
+    if (isPaying || isGenerating) return;
+    if (!user) return;
+
+    setIsPaying(true);
+    try {
+      const ok = await generatePDF();
+      if (!ok) {
+        showMessage('PDF generation failed. Please try again.', 'Generation failed');
+        return;
+      }
+      setView('success');
+      confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
+      void refreshCredits(user);
+    } finally {
+      setIsPaying(false);
+    }
+  };
+
+  /**
+   * Opens a hidden iframe with the A4 RC layout and triggers `window.print()`.
+   * Manual entry: free. AI session: still free here — credits were billed on extraction.
+   */
+  const triggerPrintIframe = (): boolean => {
+    const printEl = document.getElementById('rc-a4-print');
+    if (!printEl) return false;
+    let stylesHtml = '';
+    for (const node of document.head.querySelectorAll('style, link[rel="stylesheet"]')) {
+      stylesHtml += node.outerHTML;
+    }
+    const printIframe = document.createElement('iframe');
+    printIframe.style.cssText = 'position:absolute;top:-9999px;left:-9999px;width:0;height:0;';
+    document.body.appendChild(printIframe);
+    const iframeDoc = printIframe.contentWindow?.document;
+    if (!iframeDoc) {
+      if (document.body.contains(printIframe)) document.body.removeChild(printIframe);
+      return false;
+    }
+    iframeDoc.open();
+    iframeDoc.write(`<!DOCTYPE html><html><head>${stylesHtml}<style>
+      @page { size: A4 portrait; margin: 0; }
+      body { margin: 0; padding: 0; background: white; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+      #rc-a4-print {
+        position: relative !important;
+        left: 0 !important;
+        top: 0 !important;
+        width: 210mm !important;
+        height: 297mm !important;
+        display: block !important;
+        overflow: hidden;
+      }
+      .a4-field { position: absolute !important; white-space: nowrap; }
+    </style></head><body>${printEl.outerHTML}</body></html>`);
+    iframeDoc.close();
+    setTimeout(() => {
+      printIframe.contentWindow?.focus();
+      printIframe.contentWindow?.print();
+      setTimeout(() => { if (document.body.contains(printIframe)) document.body.removeChild(printIframe); }, 2000);
+    }, 600);
+    return true;
+  };
+
+  const payAndPrint = async () => {
+    if (isPaying || isGenerating) return;
+    if (!user) return;
+
+    setIsPaying(true);
+    try {
+      const ok = triggerPrintIframe();
+      if (!ok) {
+        showMessage('Print failed to open. Please try again.', 'Print failed');
+      }
+    } finally {
+      setIsPaying(false);
+    }
+  };
+
+  const startCreditsPurchase = async (planInr: CreditPlanInr) => {
+    if (isPaying || isGenerating) return;
+    if (!user) return;
+
+    setIsPaying(true);
+    try {
+      let token: string;
+      try {
+        token = await user.getIdToken(true);
+      } catch (e) {
+        showMessage(userFacingAuthOrNetworkError(e), 'Sign-in');
+        return;
+      }
+
+      const orderRes = await fetch('/api/razorpay/createOrder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          planInr,
+          notes: {
+            regnNo: formData.regnNo || '',
+            userEmail: user?.email || '',
+          },
+        }),
+      });
+      if (!orderRes.ok) throw new Error(await orderRes.text());
+      const { order, keyId } = await orderRes.json();
+
+      const RazorpayCtor = (window as any).Razorpay;
+      if (!RazorpayCtor) throw new Error('Razorpay checkout script not loaded');
+
+      await new Promise<void>((resolve, reject) => {
+        const rzp = new RazorpayCtor({
+          key: keyId,
+          amount: order.amount,
+          currency: order.currency,
+          name: 'Vehicle Enrollment',
+          description: `Credits pack ₹${planInr}`,
+          order_id: order.id,
+          prefill: {
+            name: user?.displayName || '',
+            email: user?.email || '',
+          },
+          notes: order.notes || undefined,
+          theme: { color: '#2563eb' },
+          handler: async (response: any) => {
+            try {
+              let verifyToken: string;
+              try {
+                verifyToken = await user.getIdToken(true);
+              } catch (e) {
+                reject(new Error(userFacingAuthOrNetworkError(e)));
+                return;
+              }
+              const verifyRes = await fetch('/api/razorpay/verifyPayment', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${verifyToken}` },
+                body: JSON.stringify(response),
+              });
+              if (!verifyRes.ok) throw new Error(await verifyRes.text());
+              const data = await verifyRes.json();
+              if (!data?.ok) throw new Error(data?.error || 'Payment verification failed');
+              setCredits(Number(data?.credits || 0) || 0);
+              void refreshCredits(user);
+              resolve();
+            } catch (e) {
+              reject(e);
+            }
+          },
+          modal: {
+            ondismiss: () => reject(new Error('Payment cancelled')),
+          },
+        });
+
+        rzp.on('payment.failed', (err: any) => {
+          reject(new Error(err?.error?.description || 'Payment failed'));
+        });
+
+        rzp.open();
+      });
+    } catch (error) {
+      console.error('Payment error:', error);
+      showMessage(userFacingAuthOrNetworkError(error), 'Payment');
+    } finally {
+      setIsPaying(false);
+      setShowPlans(false);
     }
   };
 
@@ -428,86 +601,206 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#FDFDFD] text-slate-900 font-sans">
+    <div className="min-h-screen bg-[#FDFDFD] text-slate-900 font-sans flex flex-col">
       <AnimatePresence>
-        {isExtracting && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[100] bg-slate-900/80 backdrop-blur-md flex flex-col items-center justify-center text-white p-6 text-center">
-            <div className="relative mb-8">
-              <div className="w-24 h-24 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin" />
-              <div className="absolute inset-0 flex items-center justify-center">
-                <Sparkles className="text-blue-500" size={32} />
+        {showPlans && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[110] bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-6"
+          >
+            <motion.div
+              initial={{ scale: 0.98, y: 10 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.98, y: 10 }}
+              className="bg-white rounded-[2.5rem] p-8 max-w-lg w-full shadow-2xl"
+            >
+              <div className="flex items-start justify-between gap-6 mb-6">
+                <div>
+                  <h2 className="text-2xl font-black text-slate-900">Buy Credits</h2>
+                  <p className="text-slate-500 font-medium mt-2 text-sm">
+                    <span className="font-black text-slate-900">Manual entry</span> includes free PDF download and print.
+                    {' '}
+                    <span className="font-black text-slate-900">Batch AI</span> uses{' '}
+                    <span className="font-black text-slate-900">{AI_EXTRACTION_CREDIT_COST} credits</span> per document only after successful processing (failed runs are not charged).
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowPlans(false)}
+                  className="w-10 h-10 rounded-2xl bg-slate-50 text-slate-500 font-black hover:bg-slate-100"
+                  disabled={isPaying}
+                  title="Close"
+                >
+                  ×
+                </button>
               </div>
-            </div>
-            <h2 className="text-2xl font-black tracking-widest uppercase mb-2">Analyzing RC Card</h2>
-            <p className="text-slate-400 font-medium max-w-xs">Our mission-critical AI is extracting your vehicle registration data...</p>
-          </motion.div>
-        )}
-        {showSettings && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[100] bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-6">
-            <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white rounded-[2.5rem] p-8 max-w-lg w-full shadow-2xl">
-              <h2 className="text-2xl font-black text-slate-900 mb-6">AI Rules Engine</h2>
-              <textarea value={customPrompt} onChange={(e) => setCustomPrompt(e.target.value)} placeholder="Custom instructions for AI..." rows={5} className="w-full bg-slate-50 border border-slate-100 rounded-3xl p-6 font-bold outline-none focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-100/20 transition-all text-sm shadow-sm mb-8 resize-none" />
-              <button onClick={() => setShowSettings(false)} className="w-full px-8 py-4 bg-slate-900 text-white rounded-2xl font-black uppercase tracking-widest text-xs">Save & Close</button>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {CREDIT_PLANS.map(({ inr, credits: planCredits, label }) => {
+                  const perDoc = (inr / planCredits) * AI_EXTRACTION_CREDIT_COST;
+                  return (
+                    <button
+                      key={inr}
+                      onClick={() => startCreditsPurchase(inr)}
+                      disabled={isPaying}
+                      className={`rounded-3xl border p-5 text-left transition-all disabled:opacity-50 ${
+                        label === 'Best value'
+                          ? 'border-blue-500 ring-4 ring-blue-100/40 bg-blue-50/40 hover:bg-blue-50'
+                          : 'border-slate-200 hover:border-blue-500 hover:ring-4 hover:ring-blue-100/30'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-400">{label}</div>
+                        {label === 'Best value' && (
+                          <span className="text-[9px] font-black uppercase tracking-widest bg-blue-600 text-white rounded-full px-2 py-1">
+                            Save 30%
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-2xl font-black text-slate-900 mt-2">₹{inr}</div>
+                      <div className="text-sm font-bold text-slate-700 mt-2">{planCredits} credits</div>
+                      <div className="text-[11px] font-bold text-slate-400 mt-1 tabular-nums">
+                        ≈ ₹{perDoc.toFixed(2)} / AI doc
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="mt-6 rounded-2xl bg-slate-50 border border-slate-100 p-4">
+                <div className="flex items-center justify-between text-sm font-bold text-slate-600">
+                  <span>Current balance</span>
+                  <span className="tabular-nums">{creditsLoading ? '...' : `${credits} credits`}</span>
+                </div>
+              </div>
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      <div className="w-full relative">
-        {view === 'mode-selection' && (
-          <button onClick={() => setShowSettings(true)} className="absolute top-8 right-8 z-[60] w-14 h-14 bg-white text-slate-400 rounded-2xl flex items-center justify-center hover:text-blue-600 transition-all border border-slate-100 active:scale-90 shadow-sm">
-            <Settings size={24} />
-          </button>
-        )}
+      <CreditHistoryDialog open={creditHistoryOpen} onOpenChange={setCreditHistoryOpen} user={user} />
 
+      <header
+        className="sticky top-0 z-[60] shrink-0 no-print border-b border-slate-200/90 bg-white/95 backdrop-blur-xl supports-[backdrop-filter]:bg-white/80"
+        role="banner"
+      >
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-4">
+          <div className="min-w-0 flex items-baseline gap-2">
+            <span className="text-sm sm:text-base font-black tracking-tight text-slate-900 truncate">
+              Vehicle Enrollment
+            </span>
+            {view === 'form' || view === 'preview' ? (
+              <span className="hidden sm:inline text-[10px] font-bold uppercase tracking-widest text-slate-400 truncate">
+                {isBatchEditMode ? 'Batch edit' : rcDataSource === 'manual' ? 'Manual' : 'AI'}
+              </span>
+            ) : null}
+          </div>
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            <div
+              className={`flex items-center gap-2 sm:gap-2.5 pl-2.5 sm:pl-3 pr-2 py-1.5 rounded-xl border bg-slate-50/80 ${
+                credits < AI_EXTRACTION_CREDIT_COST
+                  ? 'border-amber-200 ring-1 ring-amber-100/80'
+                  : 'border-slate-200/80'
+              }`}
+              title={credits > 0 ? `${credits} credits — batch AI processing` : 'Buy credits for batch AI'}
+            >
+              <span
+                className={`flex items-center justify-center w-7 h-7 sm:w-8 sm:h-8 rounded-lg ${
+                  credits < AI_EXTRACTION_CREDIT_COST ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'
+                }`}
+              >
+                <Coins size={16} />
+              </span>
+              <div className="flex flex-col items-start leading-none pr-1">
+                <span className="text-[8px] font-black uppercase tracking-[0.2em] text-slate-400">
+                  Credits
+                </span>
+                <span className="text-xs sm:text-sm font-black text-slate-900 tabular-nums mt-0.5">
+                  {creditsLoading ? '…' : credits.toLocaleString()}
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCreditHistoryOpen(true)}
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl border border-slate-200 bg-white text-[10px] sm:text-[11px] font-black uppercase tracking-widest text-slate-600 hover:bg-slate-50 transition-colors active:scale-[0.98]"
+              title="Credit history"
+            >
+              <History size={14} className="shrink-0" />
+              <span className="max-[380px]:sr-only">History</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowPlans(true)}
+              className="flex items-center gap-1 px-3 sm:px-4 py-2 rounded-xl bg-blue-600 text-white text-[10px] sm:text-[11px] font-black uppercase tracking-widest hover:bg-blue-700 transition-colors active:scale-[0.98] shadow-sm shadow-blue-600/20"
+            >
+              <Plus size={12} strokeWidth={3} />
+              Buy
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div className="w-full relative flex-1 min-h-0 flex flex-col">
         <AnimatePresence mode="wait">
           {view === 'mode-selection' ? (
-            <motion.div key="selection" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="max-w-5xl mx-auto space-y-12 py-24 px-6 mt-12">
+            <motion.div key="selection" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="max-w-5xl mx-auto space-y-12 py-12 sm:py-16 px-6">
               <div className="text-center space-y-4">
                 <h1 className="text-5xl font-black tracking-tight text-slate-900">Vehicle Enrollment</h1>
-                <p className="text-slate-400 font-medium text-lg leading-relaxed text-center mx-auto max-w-sm">Choose how you want to process RC documents</p>
+                <p className="text-slate-400 font-medium text-lg leading-relaxed text-center mx-auto max-w-md">
+                  Batch AI extraction for many PDFs, or enter one RC by hand — free download and print.
+                </p>
               </div>
-              
-              <div className="grid grid-cols-2 gap-6 max-w-3xl mx-auto">
-                <div className="relative h-[300px] group">
-                  <input type="file" accept="application/pdf,image/*" onChange={handlePdfUpload} disabled={isExtracting} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
-                  <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center rounded-[2.5rem] border-[3px] border-dashed border-blue-200 bg-blue-50 group-hover:bg-blue-100 transition-all">
-                    <Upload size={40} className="text-blue-600 mb-4" />
-                    <h3 className="text-xl font-black text-slate-900 mb-2">Single RC Upload</h3>
-                    <p className="text-sm text-slate-500 font-medium">Process one document instantly</p>
-                  </div>
-                </div>
 
-                <button 
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 max-w-3xl mx-auto">
+                <button
+                  type="button"
                   onClick={() => setView('batch-list')}
-                  className="relative h-[300px] group"
+                  className="relative h-[300px] group text-left"
                 >
                   <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center rounded-[2.5rem] border-[3px] border-dashed border-green-200 bg-green-50 group-hover:bg-green-100 transition-all">
                     <LayoutGrid size={40} className="text-green-600 mb-4" />
-                    <h3 className="text-xl font-black text-slate-900 mb-2">Batch Processing</h3>
-                    <p className="text-sm text-slate-500 font-medium">Upload up to 50 PDFs at once</p>
+                    <h3 className="text-xl font-black text-slate-900 mb-2">Batch processing</h3>
+                    <p className="text-sm text-slate-500 font-medium">AI on multiple PDFs (credits per successful file)</p>
                   </div>
                 </button>
-              </div>
 
-              <div className="text-center flex items-center justify-center gap-6">
-                <button onClick={() => setView('form')} className="text-slate-400 font-black uppercase tracking-widest text-sm hover:text-slate-900">Enter Details Manually &rarr;</button>
-                <span className="text-slate-200">|</span>
-                <button onClick={() => setShowCalibrator(true)} className="flex items-center gap-2 text-purple-500 font-black uppercase tracking-widest text-sm hover:text-purple-700">
-                  <Sliders size={14} /> Calibrate Layout
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRcDataSource('manual');
+                    setFormData(initialData);
+                    setSignature(null);
+                    setView('form');
+                  }}
+                  className="relative h-[300px] group text-left"
+                >
+                  <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center rounded-[2.5rem] border-[3px] border-dashed border-slate-200 bg-slate-50 group-hover:bg-slate-100 transition-all">
+                    <FileText size={40} className="text-slate-600 mb-4" />
+                    <h3 className="text-xl font-black text-slate-900 mb-2">Manual entry</h3>
+                    <p className="text-sm text-slate-500 font-medium">Type details yourself — free PDF and print</p>
+                  </div>
                 </button>
               </div>
             </motion.div>
           ) : view === 'batch-upload' ? (
-            <BatchUpload user={user!} onComplete={() => setView('batch-list')} />
+            <BatchUpload
+              user={user!}
+              credits={credits}
+              creditsLoading={creditsLoading}
+              onRequestCredits={() => setShowPlans(true)}
+              onComplete={() => setView('batch-list')}
+            />
           ) : view === 'batch-list' ? (
             <BatchListView 
               user={user!} 
               onSelectSubmission={(id) => loadBatchSubmission(id)}
-              onNewBatch={() => setView('batch-upload')}
+              onNewBatch={goToBatchUpload}
+              onCreditsMaybeChanged={() => void refreshCredits(user)}
             />
           ) : view === 'form' || view === 'preview' ? (
-            <motion.div key="workspace" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col lg:flex-row h-screen overflow-hidden bg-[#FBFBFC]">
+            <motion.div key="workspace" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col lg:flex-row h-[calc(100svh-3.5rem)] min-h-0 overflow-hidden bg-[#FBFBFC]">
               <div className="lg:w-[460px] w-full h-full overflow-y-auto bg-white border-r border-slate-100 p-8 space-y-12 pb-44 no-print custom-scrollbar">
                 <div className="flex items-center justify-between sticky top-0 bg-white/95 backdrop-blur-xl z-50 py-4 -translate-y-4 border-b border-slate-50">
                   <button 
@@ -539,43 +832,10 @@ export default function App() {
                 </div>
                 <div className="fixed bottom-0 left-0 lg:w-[460px] w-full p-6 bg-white/95 backdrop-blur-2xl border-t border-slate-100 z-50 flex gap-4 no-print">
                   <button
-                    title="Print to A4"
-                    onClick={() => {
-                      const printEl = document.getElementById('rc-a4-print');
-                      if (!printEl) return;
-                      let stylesHtml = '';
-                      for (const node of document.head.querySelectorAll('style, link[rel="stylesheet"]')) {
-                        stylesHtml += node.outerHTML;
-                      }
-                      const printIframe = document.createElement('iframe');
-                      printIframe.style.cssText = 'position:absolute;top:-9999px;left:-9999px;width:0;height:0;';
-                      document.body.appendChild(printIframe);
-                      const doc = printIframe.contentWindow?.document;
-                      if (doc) {
-                        doc.open();
-                        doc.write(`<!DOCTYPE html><html><head>${stylesHtml}<style>
-                          @page { size: A4 portrait; margin: 0; }
-                          body { margin: 0; padding: 0; background: white; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-                          #rc-a4-print { 
-                            position: relative !important; 
-                            left: 0 !important; 
-                            top: 0 !important; 
-                            width: 210mm !important; 
-                            height: 297mm !important; 
-                            display: block !important; 
-                            overflow: hidden; 
-                          }
-                          .a4-field { position: absolute !important; white-space: nowrap; }
-                        </style></head><body>${printEl.outerHTML}</body></html>`);
-                        doc.close();
-                        setTimeout(() => {
-                          printIframe.contentWindow?.focus();
-                          printIframe.contentWindow?.print();
-                          setTimeout(() => { if (document.body.contains(printIframe)) document.body.removeChild(printIframe); }, 2000);
-                        }, 600);
-                      }
-                    }}
-                    className="w-16 h-16 bg-slate-100 text-slate-500 rounded-2xl flex items-center justify-center hover:bg-slate-200"
+                    title="Print to A4 (free)"
+                    onClick={payAndPrint}
+                    disabled={isPaying || isGenerating}
+                    className="w-16 h-16 rounded-2xl flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed bg-slate-100 text-slate-500 hover:bg-slate-200"
                   >
                     <Printer size={22} />
                   </button>
@@ -589,10 +849,10 @@ export default function App() {
                             extractedData: formData,
                             updatedAt: serverTimestamp(),
                           });
-                          alert('Changes saved successfully!');
+                          showMessage('Changes saved successfully.', 'Saved');
                         } catch (error) {
                           console.error('Error saving:', error);
-                          alert('Failed to save changes');
+                          showMessage('Failed to save changes.', 'Error');
                         }
                       }}
                       className="px-6 h-16 bg-slate-100 text-slate-700 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-slate-200 transition-all"
@@ -600,8 +860,12 @@ export default function App() {
                       Save
                     </button>
                   )}
-                  <button onClick={generatePDF} disabled={isGenerating} className="flex-1 h-16 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest shadow-xl flex items-center justify-center gap-4 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
-                    {isGenerating ? 'Generating...' : 'Download Official RC'}
+                  <button
+                    onClick={payAndDownload}
+                    disabled={isGenerating || isPaying}
+                    className="flex-1 h-16 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest shadow-xl flex items-center justify-center gap-4 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isPaying ? 'Working...' : isGenerating ? 'Generating...' : 'Download PDF'}
                   </button>
                 </div>
               </div>
@@ -678,7 +942,8 @@ export default function App() {
               <button 
                 onClick={() => { 
                   setFormData(initialData); 
-                  setSignature(null); 
+                  setSignature(null);
+                  setRcDataSource('manual');
                   if (isBatchEditMode) {
                     setIsBatchEditMode(false);
                     setSelectedBatchSubmissionId(null);
@@ -715,7 +980,7 @@ function CardPreview({
   // 1 inch = 244.57px on this 856px-wide canvas (856/3.5 = 244.57)
   const PPI = 244.57;
 
-  // Load calibrated positions from localStorage (set by Calibrator tool)
+  // Load field positions from localStorage (saved layout overrides)
   const getLayout = () => {
     try {
       const saved =
@@ -762,7 +1027,7 @@ function CardPreview({
   const QR_PREVIEW = Math.round(0.70 * PREVIEW_PPI);
   const QR_PRINT   = Math.round(0.70 * 96); // 96dpi for print
 
-  // Build a unified field list from calibration positions
+  // Build a unified field list from saved layout positions
   type FieldDef = { key: string; value: string; bold?: boolean; isQR?: boolean; isSig?: boolean;
                     dx: number; dy: number; dw: number; dh: number; dSize: number };
   const FDEFS: FieldDef[] = [
@@ -796,7 +1061,7 @@ function CardPreview({
   ];
 
 
-  // Resolve each field's position from calibration or default
+  // Resolve each field's position from saved layout or default
   const resolved = FDEFS.map(f => {
     const templateDefaults = DEFAULT_TEMPLATE_LAYOUT[f.key] ?? {};
     const p = layout?.[f.key] ?? templateDefaults;

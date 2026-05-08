@@ -1,10 +1,23 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
+import fs from 'fs';
 import path from 'path';
 import {defineConfig, loadEnv} from 'vite';
 
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
+  const firebaseProjectId = (() => {
+    try {
+      const raw = fs.readFileSync(path.resolve(__dirname, '.firebaserc'), 'utf8');
+      const parsed = JSON.parse(raw);
+      return parsed?.projects?.default || '';
+    } catch {
+      return '';
+    }
+  })();
+  const functionsBaseUrl = firebaseProjectId
+    ? `http://127.0.0.1:5001/${firebaseProjectId}/us-central1`
+    : '';
   return {
     plugins: [
       react(), 
@@ -16,6 +29,12 @@ export default defineConfig(({mode}) => {
             if (req.method !== 'POST') {
               res.statusCode = 405;
               return res.end('Method Not Allowed');
+            }
+            const authHeader = String(req.headers.authorization || '');
+            if (!authHeader.startsWith('Bearer ')) {
+              res.statusCode = 401;
+              res.setHeader('Content-Type', 'application/json');
+              return res.end(JSON.stringify({ error: 'Authorization required for AI extraction' }));
             }
             
             let body = '';
@@ -95,6 +114,161 @@ export default defineConfig(({mode}) => {
                 res.statusCode = 500;
                 res.setHeader('Content-Type', 'application/json');
                 res.end(JSON.stringify({error: message}));
+              }
+            });
+          });
+
+          server.middlewares.use('/api/razorpay/createOrder', async (req, res) => {
+            if (req.method !== 'POST') {
+              res.statusCode = 405;
+              return res.end('Method Not Allowed');
+            }
+            if (!functionsBaseUrl) {
+              res.statusCode = 500;
+              return res.end('Missing Firebase project id (.firebaserc)');
+            }
+
+            let body = '';
+            req.on('data', chunk => { body += chunk.toString(); });
+            req.on('end', async () => {
+              try {
+                const authHeader = String(req.headers.authorization || '');
+                const upstream = await fetch(`${functionsBaseUrl}/createRazorpayOrder`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    ...(authHeader ? { Authorization: authHeader } : {}),
+                  },
+                  body,
+                });
+                const text = await upstream.text();
+                res.statusCode = upstream.status;
+                res.setHeader('Content-Type', upstream.headers.get('content-type') || 'application/json');
+                res.end(text);
+              } catch (err: any) {
+                res.statusCode = 500;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ error: err?.message || 'Failed to call functions emulator' }));
+              }
+            });
+          });
+
+          server.middlewares.use('/api/razorpay/verifyPayment', async (req, res) => {
+            if (req.method !== 'POST') {
+              res.statusCode = 405;
+              return res.end('Method Not Allowed');
+            }
+            if (!functionsBaseUrl) {
+              res.statusCode = 500;
+              return res.end('Missing Firebase project id (.firebaserc)');
+            }
+
+            let body = '';
+            req.on('data', chunk => { body += chunk.toString(); });
+            req.on('end', async () => {
+              try {
+                const authHeader = String(req.headers.authorization || '');
+                const upstream = await fetch(`${functionsBaseUrl}/verifyRazorpayPayment`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    ...(authHeader ? { Authorization: authHeader } : {}),
+                  },
+                  body,
+                });
+                const text = await upstream.text();
+                res.statusCode = upstream.status;
+                res.setHeader('Content-Type', upstream.headers.get('content-type') || 'application/json');
+                res.end(text);
+              } catch (err: any) {
+                res.statusCode = 500;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ error: err?.message || 'Failed to call functions emulator' }));
+              }
+            });
+          });
+
+          server.middlewares.use('/api/credits/me', async (req, res) => {
+            if (req.method !== 'GET') {
+              res.statusCode = 405;
+              return res.end('Method Not Allowed');
+            }
+            if (!functionsBaseUrl) {
+              res.statusCode = 500;
+              return res.end('Missing Firebase project id (.firebaserc)');
+            }
+            try {
+              const upstream = await fetch(`${functionsBaseUrl}/getMyCredits`, {
+                method: 'GET',
+                headers: { Authorization: String(req.headers.authorization || '') },
+              });
+              const text = await upstream.text();
+              res.statusCode = upstream.status;
+              res.setHeader('Content-Type', upstream.headers.get('content-type') || 'application/json');
+              res.end(text);
+            } catch (err: any) {
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: err?.message || 'Failed to call functions emulator' }));
+            }
+          });
+
+          server.middlewares.use('/api/credits/history', async (req, res) => {
+            if (req.method !== 'GET') {
+              res.statusCode = 405;
+              return res.end('Method Not Allowed');
+            }
+            if (!functionsBaseUrl) {
+              res.statusCode = 500;
+              return res.end('Missing Firebase project id (.firebaserc)');
+            }
+            try {
+              const u = new URL(req.url || '/', 'http://vite.local');
+              const qs = u.search || '';
+              const upstream = await fetch(`${functionsBaseUrl}/getCreditHistory${qs}`, {
+                method: 'GET',
+                headers: { Authorization: String(req.headers.authorization || '') },
+              });
+              const text = await upstream.text();
+              res.statusCode = upstream.status;
+              res.setHeader('Content-Type', upstream.headers.get('content-type') || 'application/json');
+              res.end(text);
+            } catch (err: any) {
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: err?.message || 'Failed to call functions emulator' }));
+            }
+          });
+
+          server.middlewares.use('/api/credits/consume', async (req, res) => {
+            if (req.method !== 'POST') {
+              res.statusCode = 405;
+              return res.end('Method Not Allowed');
+            }
+            if (!functionsBaseUrl) {
+              res.statusCode = 500;
+              return res.end('Missing Firebase project id (.firebaserc)');
+            }
+            let body = '';
+            req.on('data', chunk => { body += chunk.toString(); });
+            req.on('end', async () => {
+              try {
+                const upstream = await fetch(`${functionsBaseUrl}/consumeCredits`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: String(req.headers.authorization || ''),
+                  },
+                  body,
+                });
+                const text = await upstream.text();
+                res.statusCode = upstream.status;
+                res.setHeader('Content-Type', upstream.headers.get('content-type') || 'application/json');
+                res.end(text);
+              } catch (err: any) {
+                res.statusCode = 500;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ error: err?.message || 'Failed to call functions emulator' }));
               }
             });
           });

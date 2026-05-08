@@ -15,7 +15,8 @@
   "dependencies": {
     "@google/genai": "^1.50.1",
     "firebase-admin": "^11.8.0",
-    "firebase-functions": "^4.3.1"
+    "firebase-functions": "^4.3.1",
+    "razorpay": "^2.9.6"
   },
   "private": true
 }

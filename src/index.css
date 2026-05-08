@@ -26,7 +26,30 @@
     size: A4 portrait;
     margin: 0;
   }
-  body, html {
+
+  /*
+   * AI-assisted sessions (`data-print-policy="ai-guard"`): block printing the
+   * live app so Ctrl+P cannot substitute for a billed workflow. Use in-app Print
+   * (iframe) which is allowed to render without this stylesheet.
+   *
+   * Manual entry (`data-print-policy="manual-free"`): allow the normal RC print
+   * layout so users can print / “Save as PDF” from the browser for free.
+   */
+  html[data-print-policy="ai-guard"] body > #root {
+    display: none !important;
+  }
+  html[data-print-policy="ai-guard"] body::before {
+    content: "AI-processed RCs: use the in-app Print or Download button. Browser print from this page is disabled.";
+    display: block;
+    padding: 24mm 18mm;
+    font-family: Inter, system-ui, sans-serif;
+    font-size: 12pt;
+    font-weight: 700;
+    color: #0f172a;
+  }
+
+  html[data-print-policy="manual-free"] body,
+  html[data-print-policy="manual-free"] html {
     background: white !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
@@ -34,19 +57,23 @@
     width: auto !important;
     overflow: visible !important;
   }
-  #root, .h-screen, .overflow-hidden, .overflow-auto, .overflow-y-auto {
+  html[data-print-policy="manual-free"] #root,
+  html[data-print-policy="manual-free"] .h-screen,
+  html[data-print-policy="manual-free"] .overflow-hidden,
+  html[data-print-policy="manual-free"] .overflow-auto,
+  html[data-print-policy="manual-free"] .overflow-y-auto {
     height: auto !important;
     overflow: visible !important;
     display: block !important;
     position: static !important;
   }
-  .no-print {
+  html[data-print-policy="manual-free"] .no-print {
     display: none !important;
   }
-  .print-invisible {
+  html[data-print-policy="manual-free"] .print-invisible {
     visibility: hidden !important;
   }
-  #rc-card-preview {
+  html[data-print-policy="manual-free"] #rc-card-preview {
     position: absolute !important;
     top: 15mm !important;
     left: 15mm !important;
@@ -59,7 +86,7 @@
     page-break-inside: avoid;
     z-index: 9999 !important;
   }
-  .qr-container {
+  html[data-print-policy="manual-free"] .qr-container {
     border: none !important;
     background: transparent !important;
   }

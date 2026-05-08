@@ -2,6 +2,8 @@ const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const { GoogleGenAI } = require("@google/genai");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const Razorpay = require("razorpay");
+const crypto = require("crypto");
 
 admin.initializeApp();
 
@@ -51,6 +53,115 @@ const logLine = (level, submissionId, step, detail, meta = {}) => {
   logger[level](msg, { submissionId, step, ...meta });
 };
 
+const allowCors = (req, res) => {
+  res.set("Access-Control-Allow-Origin", "*");
+  res.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  if (req.method === "OPTIONS") {
+    res.status(204).send("");
+    return true;
+  }
+  return false;
+};
+
+const requireEnv = (name) => {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing env var: ${name}`);
+  return value;
+};
+
+/**
+ * Use the Gemini Developer API with an API key only.
+ * If GEMINI_API_KEY is missing, @google/genai may use Application Default Credentials (emulator / gcloud)
+ * and hit generativelanguage.googleapis.com with an OAuth token that lacks scopes →
+ * 403 PERMISSION_DENIED / ACCESS_TOKEN_SCOPE_INSUFFICIENT.
+ */
+const createGenaiClient = () => {
+  const apiKey = requireEnv("GEMINI_API_KEY");
+  return new GoogleGenAI({
+    apiKey,
+    vertexai: false,
+  });
+};
+
+const requireAuth = async (req) => {
+  const header = req.get("authorization") || req.get("Authorization") || "";
+  const match = String(header).match(/^Bearer\s+(.+)$/i);
+  if (!match) {
+    const err = new Error("Missing Authorization bearer token");
+    err.code = 401;
+    throw err;
+  }
+  const token = match[1];
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    if (!decoded?.uid) throw new Error("Invalid token");
+    return decoded;
+  } catch (e) {
+    const err = new Error("Invalid Authorization bearer token");
+    err.code = 401;
+    throw err;
+  }
+};
+
+// Credit packs offered. Keyed by INR amount.
+// 100 INR -> 100 credits (entry pack); 299 INR -> 350 credits (value pack).
+// AI extraction (each batch file, etc.) costs AI_PROCESSING_CREDIT_COST
+// credits on success only (see deductAiCreditsOrThrow). Manual PDF workflows do not
+// hit these endpoints and are free on the client.
+const PLANS = {
+  100: { amountInr: 100, credits: 100 },
+  299: { amountInr: 299, credits: 350 },
+};
+
+const getUserRef = (uid) => getFirestore().collection("users").doc(uid);
+
+/** Credits charged only after a successful AI extraction. Not charged on failure. Manual entry uses no AI and is free on the client. */
+const AI_PROCESSING_CREDIT_COST = asInt(process.env.AI_PROCESSING_CREDIT_COST, 2);
+
+const deductAiCreditsOrThrow = async (uid, ledgerMeta = {}) => {
+  if (!uid || typeof uid !== "string") {
+    const err = new Error("Missing user id for billing");
+    err.code = "BAD_USER";
+    throw err;
+  }
+  const db = getFirestore();
+  const userRef = getUserRef(uid);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(userRef);
+    const cur = Number(snap.data()?.credits ?? 0);
+    if (!Number.isFinite(cur) || cur < AI_PROCESSING_CREDIT_COST) {
+      const err = new Error(
+        `Insufficient credits for AI processing (need ${AI_PROCESSING_CREDIT_COST}, have ${Number.isFinite(cur) ? cur : 0})`
+      );
+      err.code = "INSUFFICIENT_CREDITS";
+      throw err;
+    }
+    const nextBal = cur - AI_PROCESSING_CREDIT_COST;
+    tx.set(
+      userRef,
+      { credits: nextBal, updatedAt: FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+    const ledgerRef = userRef.collection("creditLedger").doc();
+    const source = ledgerMeta.source || "ai_extraction";
+    const label =
+      source === "batch_ai"
+        ? "Batch AI — PDF extraction"
+        : source === "extractRc"
+          ? "AI extraction"
+          : "AI processing";
+    tx.set(ledgerRef, {
+      createdAt: FieldValue.serverTimestamp(),
+      delta: -AI_PROCESSING_CREDIT_COST,
+      balanceAfter: nextBal,
+      type: "ai_extraction",
+      label,
+      meta: ledgerMeta && typeof ledgerMeta === "object" ? ledgerMeta : {},
+    });
+  });
+};
+
 exports.extractRc = functions.https.onRequest(async (req, res) => {
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -67,6 +178,7 @@ exports.extractRc = functions.https.onRequest(async (req, res) => {
   }
 
   try {
+    const auth = await requireAuth(req);
     const { base64Data, base64Image, mimeType, customPrompt } = req.body || {};
     const payloadData = base64Data || base64Image;
     const payloadMimeType = mimeType || "image/jpeg";
@@ -76,7 +188,7 @@ exports.extractRc = functions.https.onRequest(async (req, res) => {
       return;
     }
 
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const ai = createGenaiClient();
     
     const prompt = `
       You are a highly accurate OCR and data extraction system for Vehicle Registration Certificates (RC).
@@ -125,34 +237,300 @@ exports.extractRc = functions.https.onRequest(async (req, res) => {
 
     const text = response.text;
     const extractedData = JSON.parse(text || '{}');
-    
+
+    await deductAiCreditsOrThrow(auth.uid, { source: "extractRc" });
+
     res.json(extractedData);
   } catch (error) {
+    const code = Number(error?.code);
+    if (code === 401) {
+      res.status(401).json({ error: error.message || "Unauthorized" });
+      return;
+    }
+    if (error?.code === "INSUFFICIENT_CREDITS") {
+      res.status(402).json({
+        error: "INSUFFICIENT_CREDITS",
+        message: error.message || "Insufficient credits for AI processing",
+        creditsRequired: AI_PROCESSING_CREDIT_COST,
+      });
+      return;
+    }
     console.error("Extraction error:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
-exports.processBatchSubmission = functions
-  .runWith({
-    // Each Firestore background invocation processes exactly one submission.
-    // Allow multiple instances so many PDFs can be processed in parallel.
-    // (In the emulator this may still appear limited, but in production this controls parallelism.)
-    maxInstances: BATCH_MAX_INSTANCES,
-    timeoutSeconds: Math.ceil(Math.max(BATCH_ENTRY_TIMEOUT_MS, GEMINI_TIMEOUT_MS, PDF_FETCH_TIMEOUT_MS) / 1000) + 10,
-  })
-  .firestore
-  .document('batchSubmissions/{submissionId}')
-  .onCreate(async (snap, context) => {
-    const submissionId = context.params.submissionId;
-    const submission = snap.data();
+exports.createRazorpayOrder = functions.https.onRequest(async (req, res) => {
+  if (allowCors(req, res)) return;
+  if (req.method !== "POST") {
+    res.status(405).send("Method Not Allowed");
+    return;
+  }
 
-    if (submission.status !== 'pending') {
-      return null;
+  try {
+    const auth = await requireAuth(req);
+    const keyId = requireEnv("RAZORPAY_KEY_ID");
+    const keySecret = requireEnv("RAZORPAY_KEY_SECRET");
+
+    const { planInr, currency = "INR", notes } = req.body || {};
+    const planKey = Number(planInr);
+    const plan = PLANS[planKey];
+    if (!plan) {
+      res.status(400).json({ error: "Invalid planInr. Allowed: 100, 299" });
+      return;
     }
 
-    try {
-      const startedAt = Date.now();
+    const razorpay = new Razorpay({ key_id: keyId, key_secret: keySecret });
+    // Razorpay: receipt must be unique and max 40 chars (Firebase UID + timestamp exceeds that).
+    const receipt = `c_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
+    const order = await razorpay.orders.create({
+      amount: plan.amountInr * 100,
+      currency,
+      receipt,
+      notes: {
+        ...(notes && typeof notes === "object" ? notes : {}),
+        uid: auth.uid,
+        planInr: String(plan.amountInr),
+        credits: String(plan.credits),
+      },
+    });
+
+    await getFirestore()
+      .collection("razorpayOrders")
+      .doc(order.id)
+      .set({
+        uid: auth.uid,
+        planInr: plan.amountInr,
+        credits: plan.credits,
+        status: "created",
+        receipt: order.receipt || receipt,
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+
+    res.json({ order, keyId });
+  } catch (error) {
+    const msg = error?.message || String(error);
+    logger.error(`[razorpay] createOrder error: ${msg}`, { stack: error?.stack });
+    const status = Number(error?.code) === 401 ? 401 : 500;
+    res.status(status).json({ error: msg || "Failed to create order" });
+  }
+});
+
+exports.verifyRazorpayPayment = functions.https.onRequest(async (req, res) => {
+  if (allowCors(req, res)) return;
+  if (req.method !== "POST") {
+    res.status(405).send("Method Not Allowed");
+    return;
+  }
+
+  try {
+    const auth = await requireAuth(req);
+    const keySecret = requireEnv("RAZORPAY_KEY_SECRET");
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      res.status(400).json({ ok: false, error: "Missing Razorpay fields" });
+      return;
+    }
+
+    const payload = `${razorpay_order_id}|${razorpay_payment_id}`;
+    const expected = crypto.createHmac("sha256", keySecret).update(payload).digest("hex");
+    const ok = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(String(razorpay_signature)));
+
+    if (!ok) {
+      res.status(400).json({ ok: false, error: "Invalid signature" });
+      return;
+    }
+
+    const db = getFirestore();
+    const orderRef = db.collection("razorpayOrders").doc(String(razorpay_order_id));
+    const userRef = getUserRef(auth.uid);
+
+    const result = await db.runTransaction(async (tx) => {
+      const orderSnap = await tx.get(orderRef);
+      if (!orderSnap.exists) throw new Error("Unknown order");
+      const orderData = orderSnap.data() || {};
+      if (orderData.uid !== auth.uid) {
+        const err = new Error("Order does not belong to user");
+        err.code = 403;
+        throw err;
+      }
+      if (orderData.status === "credited") {
+        const userSnap = await tx.get(userRef);
+        const credits = Number(userSnap.data()?.credits || 0);
+        return { alreadyCredited: true, credits };
+      }
+
+      const creditsToAdd = Number(orderData.credits || 0);
+      if (!Number.isFinite(creditsToAdd) || creditsToAdd <= 0) throw new Error("Invalid order credits");
+
+      const userSnap = await tx.get(userRef);
+      const currentCredits = Number(userSnap.data()?.credits || 0);
+      const nextCredits = currentCredits + creditsToAdd;
+      tx.set(userRef, { credits: nextCredits, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+
+      const ledgerRef = userRef.collection("creditLedger").doc();
+      tx.set(ledgerRef, {
+        createdAt: FieldValue.serverTimestamp(),
+        delta: creditsToAdd,
+        balanceAfter: nextCredits,
+        type: "purchase",
+        label: `Purchase — +${creditsToAdd} credits`,
+        meta: {
+          orderId: String(razorpay_order_id),
+          paymentId: String(razorpay_payment_id),
+          planInr: orderData.planInr,
+        },
+      });
+
+      tx.set(
+        orderRef,
+        {
+          status: "credited",
+          razorpay_payment_id: String(razorpay_payment_id),
+          creditedAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      return { alreadyCredited: false, credits: nextCredits };
+    });
+
+    res.json({ ok: true, credits: result.credits, alreadyCredited: result.alreadyCredited });
+  } catch (error) {
+    logger.error("[razorpay] verifyPayment error", { message: error?.message, stack: error?.stack });
+    const status = Number(error?.code) === 401 ? 401 : Number(error?.code) === 403 ? 403 : 500;
+    res.status(status).json({ ok: false, error: error?.message || "Failed to verify payment" });
+  }
+});
+
+exports.getMyCredits = functions.https.onRequest(async (req, res) => {
+  if (allowCors(req, res)) return;
+  if (req.method !== "GET") {
+    res.status(405).send("Method Not Allowed");
+    return;
+  }
+  try {
+    const auth = await requireAuth(req);
+    const snap = await getUserRef(auth.uid).get();
+    const credits = Number(snap.data()?.credits || 0);
+    res.json({ credits: Number.isFinite(credits) ? credits : 0 });
+  } catch (error) {
+    const status = Number(error?.code) === 401 ? 401 : 500;
+    res.status(status).json({ error: error?.message || "Failed to get credits" });
+  }
+});
+
+exports.getCreditHistory = functions.https.onRequest(async (req, res) => {
+  if (allowCors(req, res)) return;
+  if (req.method !== "GET") {
+    res.status(405).send("Method Not Allowed");
+    return;
+  }
+  try {
+    const auth = await requireAuth(req);
+    const limitRaw = Number(req.query?.limit);
+    const limit = Math.min(50, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 12));
+    const startAfterId = req.query?.startAfter ? String(req.query.startAfter) : "";
+
+    const db = getFirestore();
+    const col = getUserRef(auth.uid).collection("creditLedger");
+    let q = col.orderBy("createdAt", "desc").limit(limit + 1);
+    if (startAfterId) {
+      const cursorDoc = await col.doc(startAfterId).get();
+      if (cursorDoc.exists) {
+        q = col.orderBy("createdAt", "desc").startAfter(cursorDoc).limit(limit + 1);
+      }
+    }
+
+    const snap = await q.get();
+    const docs = snap.docs;
+    const hasMore = docs.length > limit;
+    const pageDocs = hasMore ? docs.slice(0, limit) : docs;
+
+    const items = pageDocs.map((d) => {
+      const data = d.data() || {};
+      const createdAtMs = data.createdAt?.toMillis ? data.createdAt.toMillis() : null;
+      return {
+        id: d.id,
+        createdAtMs,
+        delta: Number(data.delta),
+        balanceAfter: Number(data.balanceAfter),
+        type: data.type || null,
+        label: data.label || "",
+        meta: data.meta && typeof data.meta === "object" ? data.meta : {},
+      };
+    });
+
+    const nextCursor = hasMore && pageDocs.length ? pageDocs[pageDocs.length - 1].id : null;
+
+    res.json({ items, nextCursor });
+  } catch (error) {
+    const status = Number(error?.code) === 401 ? 401 : 500;
+    logger.error("[credits] history error", { message: error?.message });
+    res.status(status).json({ error: error?.message || "Failed to load credit history" });
+  }
+});
+
+exports.consumeCredits = functions.https.onRequest(async (req, res) => {
+  if (allowCors(req, res)) return;
+  if (req.method !== "POST") {
+    res.status(405).send("Method Not Allowed");
+    return;
+  }
+  try {
+    const auth = await requireAuth(req);
+    const { cost } = req.body || {};
+    const nCost = Number(cost);
+    if (!Number.isFinite(nCost) || nCost <= 0) {
+      res.status(400).json({ ok: false, error: "Invalid cost" });
+      return;
+    }
+    const db = getFirestore();
+    const userRef = getUserRef(auth.uid);
+    const result = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(userRef);
+      const current = Number(snap.data()?.credits || 0);
+      if (!Number.isFinite(current) || current < nCost) {
+        return { ok: false, credits: Number.isFinite(current) ? current : 0 };
+      }
+      const next = current - nCost;
+      tx.set(userRef, { credits: next, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+      const ledgerRef = userRef.collection("creditLedger").doc();
+      tx.set(ledgerRef, {
+        createdAt: FieldValue.serverTimestamp(),
+        delta: -nCost,
+        balanceAfter: next,
+        type: "consume",
+        label: `Used ${nCost} credits`,
+        meta: {},
+      });
+      return { ok: true, credits: next };
+    });
+    res.json(result);
+  } catch (error) {
+    const status = Number(error?.code) === 401 ? 401 : 500;
+    res.status(status).json({ ok: false, error: error?.message || "Failed to consume credits" });
+  }
+});
+
+const batchSubmissionRuntimeOpts = {
+  maxInstances: BATCH_MAX_INSTANCES,
+  timeoutSeconds: Math.ceil(Math.max(BATCH_ENTRY_TIMEOUT_MS, GEMINI_TIMEOUT_MS, PDF_FETCH_TIMEOUT_MS) / 1000) + 10,
+};
+
+/**
+ * Shared batch PDF → Gemini → deduct credits → mark processed.
+ * Used by onCreate (new uploads) and onUpdate (retry after error / stuck processing).
+ */
+async function runBatchSubmissionWorker(snap, submissionId) {
+  const submission = snap.data();
+  if (!submission || submission.status !== "pending") {
+    return null;
+  }
+
+  try {
+    const startedAt = Date.now();
       logLine(
         "info",
         submissionId,
@@ -207,7 +585,7 @@ exports.processBatchSubmission = functions
 
         const base64Data = Buffer.from(arrayBuffer).toString('base64');
 
-        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+        const ai = createGenaiClient();
 
         const prompt = `
         You are a highly accurate OCR and data extraction system for Vehicle Registration Certificates (RC).
@@ -266,6 +644,39 @@ exports.processBatchSubmission = functions
         return { extractedData, pdfBytes, totalMs: Date.now() - t0 };
       });
 
+      const batchUid = String(submission.userId || "").trim();
+      if (!batchUid) {
+        throw new Error("Missing userId on submission (required for AI billing)");
+      }
+      try {
+        await deductAiCreditsOrThrow(batchUid, { source: "batch_ai", batchSubmissionId: submissionId });
+        const balSnap = await getUserRef(batchUid).get();
+        const remaining = Number(balSnap.data()?.credits ?? 0);
+        logLine(
+          "info",
+          submissionId,
+          "billing",
+          `deducted=${AI_PROCESSING_CREDIT_COST} balance=${Number.isFinite(remaining) ? remaining : "?"}`,
+          { uid: batchUid, remaining }
+        );
+      } catch (deductErr) {
+        if (deductErr?.code === "INSUFFICIENT_CREDITS") {
+          await snap.ref.update({
+            status: "error",
+            errorCode: "INSUFFICIENT_CREDITS",
+            errorMessage:
+              deductErr.message ||
+              `Insufficient credits for AI processing (need ${AI_PROCESSING_CREDIT_COST} per file)`,
+            failedAt: FieldValue.serverTimestamp(),
+            leaseExpiresAt: null,
+            leaseExpiresAtMs: null,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+          return null;
+        }
+        throw deductErr;
+      }
+
       await snap.ref.update({
         status: 'processed',
         extractedData: result.extractedData,
@@ -313,6 +724,25 @@ exports.processBatchSubmission = functions
     }
 
     return null;
+}
+
+exports.processBatchSubmission = functions
+  .runWith(batchSubmissionRuntimeOpts)
+  .firestore.document("batchSubmissions/{submissionId}")
+  .onCreate(async (snap, context) => runBatchSubmissionWorker(snap, context.params.submissionId));
+
+/** Retries reset status to `pending` via updateDoc — onCreate does not run; this handles re-processing + billing. */
+exports.processBatchSubmissionRetry = functions
+  .runWith(batchSubmissionRuntimeOpts)
+  .firestore.document("batchSubmissions/{submissionId}")
+  .onUpdate(async (change, context) => {
+    const before = change.before.data();
+    const after = change.after.data();
+    if (!after || after.status !== "pending") return null;
+    if (!before) return null;
+    if (before.status === "pending") return null;
+    if (before.status !== "error" && before.status !== "processing") return null;
+    return runBatchSubmissionWorker(change.after, context.params.submissionId);
   });
 
 // Background sweeper to ensure nothing stays "processing" forever.
