@@ -31,6 +31,15 @@ const PROCESSING_STUCK_AFTER_MS = asInt(
 // Retention: auto-delete uploaded PDFs after N ms (keep DB entry).
 const PDF_RETENTION_MS = asInt(process.env.PDF_RETENTION_MS, 24 * 60 * 60 * 1000); // default 24h
 
+// Abuse / cost controls for single-shot image extraction (HTTPS).
+const EXTRACT_RC_MAX_BASE64_CHARS = asInt(process.env.EXTRACT_RC_MAX_BASE64_CHARS, 14_000_000);
+const EXTRACT_RC_RATE_WINDOW_MS = asInt(process.env.EXTRACT_RC_RATE_WINDOW_MS, 60_000);
+const EXTRACT_RC_RATE_LIMIT_MAX = asInt(process.env.EXTRACT_RC_RATE_LIMIT_MAX, 24);
+// Per-user cap on billable batch AI jobs starting in a window (before Gemini runs).
+const BATCH_AI_DEBIT_WINDOW_MS = asInt(process.env.BATCH_AI_DEBIT_WINDOW_MS, 3_600_000);
+const BATCH_AI_DEBIT_MAX = asInt(process.env.BATCH_AI_DEBIT_MAX, 200);
+const MAX_BATCH_PDF_BYTES = asInt(process.env.MAX_BATCH_PDF_BYTES, 12 * 1024 * 1024);
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const withTimeout = async (label, ms, fn) => {
@@ -116,7 +125,29 @@ const PLANS = {
 
 const getUserRef = (uid) => getFirestore().collection("users").doc(uid);
 
-/** Credits charged only after a successful AI extraction. Not charged on failure. Manual entry uses no AI and is free on the client. */
+const normalizeEmail = (e) => String(e || "").trim().toLowerCase();
+
+/** Email allowed to call claimSuperAdmin and receive `superAdmin: true` on their user doc. */
+const getConfiguredSuperAdminEmail = () => {
+  const raw = process.env.SUPER_ADMIN_EMAIL;
+  if (!raw || !String(raw).trim()) return null;
+  return normalizeEmail(raw);
+};
+
+const ADMIN_GRANT_MAX_PER_CALL = asInt(process.env.ADMIN_GRANT_MAX_PER_CALL, 50_000);
+
+const isSuperAdminUser = async (uid) => {
+  const snap = await getUserRef(uid).get();
+  return snap.data()?.superAdmin === true;
+};
+
+const hasAnySuperAdmin = async () => {
+  const db = getFirestore();
+  const snap = await db.collection("users").where("superAdmin", "==", true).limit(1).get();
+  return !snap.empty;
+};
+
+/** Cost per AI extraction (image or PDF). Debited before Gemini; refunded on failure so users are not charged for failed runs. Manual entry uses no AI and is free on the client. */
 const AI_PROCESSING_CREDIT_COST = asInt(process.env.AI_PROCESSING_CREDIT_COST, 2);
 
 const deductAiCreditsOrThrow = async (uid, ledgerMeta = {}) => {
@@ -162,6 +193,157 @@ const deductAiCreditsOrThrow = async (uid, ledgerMeta = {}) => {
   });
 };
 
+/**
+ * Idempotent rate limit (Firestore-backed). Uses admin SDK — not exposed to clients.
+ */
+const assertWithinRateLimit = async (uid, key, max, windowMs) => {
+  if (!uid || max <= 0 || windowMs <= 0) return;
+  const db = getFirestore();
+  const ref = db.collection("_rateLimits").doc(`${uid}_${key}`);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const now = Date.now();
+    const data = snap.data() || {};
+    let windowStart = Number(data.windowStart) || 0;
+    let count = Number(data.count) || 0;
+    if (!Number.isFinite(windowStart) || now - windowStart >= windowMs) {
+      windowStart = now;
+      count = 0;
+    }
+    if (count >= max) {
+      const err = new Error("Too many AI requests. Please wait and try again.");
+      err.code = 429;
+      throw err;
+    }
+    count += 1;
+    tx.set(
+      ref,
+      { windowStart, count, updatedAt: FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+  });
+};
+
+/** Refund one AI charge (e.g. after Gemini failure). */
+const refundAiCredits = async (uid, ledgerMeta = {}) => {
+  if (!uid || typeof uid !== "string") return;
+  const db = getFirestore();
+  const userRef = getUserRef(uid);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(userRef);
+    const cur = Number(snap.data()?.credits ?? 0);
+    const nextBal = cur + AI_PROCESSING_CREDIT_COST;
+    tx.set(
+      userRef,
+      { credits: nextBal, updatedAt: FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+    const ledgerRef = userRef.collection("creditLedger").doc();
+    tx.set(ledgerRef, {
+      createdAt: FieldValue.serverTimestamp(),
+      delta: AI_PROCESSING_CREDIT_COST,
+      balanceAfter: nextBal,
+      type: "refund",
+      label: ledgerMeta.label || "AI processing refund",
+      meta: ledgerMeta && typeof ledgerMeta === "object" ? ledgerMeta : {},
+    });
+  });
+};
+
+/**
+ * Debit for batch row before Gemini so unpaid users cannot burn API quota.
+ * Skips if this submission was already debited (retry after crash) or already settled.
+ */
+const debitBatchSubmissionIfNeeded = async (submissionRef, submissionId, uid) => {
+  await assertWithinRateLimit(uid, "batchAiDebit", BATCH_AI_DEBIT_MAX, BATCH_AI_DEBIT_WINDOW_MS);
+  const db = getFirestore();
+  const userRef = getUserRef(uid);
+  return await db.runTransaction(async (tx) => {
+    const subSnap = await tx.get(submissionRef);
+    const sub = subSnap.data() || {};
+    if (sub.aiBillingState === "settled") {
+      return { didDebit: false, alreadySettled: true };
+    }
+    if (sub.aiBillingState === "debited") {
+      return { didDebit: false, alreadyDebited: true };
+    }
+    if (sub.status !== "processing") {
+      const err = new Error("Batch submission not in processing state");
+      err.code = "BAD_STATE";
+      throw err;
+    }
+
+    const userSnap = await tx.get(userRef);
+    const cur = Number(userSnap.data()?.credits ?? 0);
+    if (!Number.isFinite(cur) || cur < AI_PROCESSING_CREDIT_COST) {
+      const err = new Error(
+        `Insufficient credits for AI processing (need ${AI_PROCESSING_CREDIT_COST}, have ${Number.isFinite(cur) ? cur : 0})`
+      );
+      err.code = "INSUFFICIENT_CREDITS";
+      throw err;
+    }
+    const nextBal = cur - AI_PROCESSING_CREDIT_COST;
+    tx.set(
+      userRef,
+      { credits: nextBal, updatedAt: FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+    const ledgerRef = userRef.collection("creditLedger").doc();
+    tx.set(ledgerRef, {
+      createdAt: FieldValue.serverTimestamp(),
+      delta: -AI_PROCESSING_CREDIT_COST,
+      balanceAfter: nextBal,
+      type: "ai_extraction",
+      label: "Batch AI — PDF extraction",
+      meta: { source: "batch_ai", batchSubmissionId: submissionId },
+    });
+    tx.set(
+      submissionRef,
+      { aiBillingState: "debited", updatedAt: FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+    return { didDebit: true };
+  });
+};
+
+/** Undo batch debit if Gemini / pipeline failed or job timed out in processing. */
+const refundBatchAiIfDebited = async (submissionRef, submissionId, uid) => {
+  if (!uid || typeof uid !== "string") return;
+  const db = getFirestore();
+  const userRef = getUserRef(uid);
+  try {
+    await db.runTransaction(async (tx) => {
+      const subSnap = await tx.get(submissionRef);
+      if (subSnap.data()?.aiBillingState !== "debited") return;
+
+      const userSnap = await tx.get(userRef);
+      const cur = Number(userSnap.data()?.credits ?? 0);
+      const nextBal = cur + AI_PROCESSING_CREDIT_COST;
+      tx.set(
+        userRef,
+        { credits: nextBal, updatedAt: FieldValue.serverTimestamp() },
+        { merge: true }
+      );
+      const ledgerRef = userRef.collection("creditLedger").doc();
+      tx.set(ledgerRef, {
+        createdAt: FieldValue.serverTimestamp(),
+        delta: AI_PROCESSING_CREDIT_COST,
+        balanceAfter: nextBal,
+        type: "refund",
+        label: "Batch AI — refund (failed or timed out)",
+        meta: { source: "batch_ai", batchSubmissionId: submissionId },
+      });
+      tx.set(
+        submissionRef,
+        { aiBillingState: "none", updatedAt: FieldValue.serverTimestamp() },
+        { merge: true }
+      );
+    });
+  } catch (e) {
+    logger.error("[batch] refund failed", { submissionId, message: e?.message });
+  }
+};
+
 exports.extractRc = functions.https.onRequest(async (req, res) => {
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -177,8 +359,18 @@ exports.extractRc = functions.https.onRequest(async (req, res) => {
     return;
   }
 
+  let debitedForThisRequest = false;
+  let uid = null;
   try {
     const auth = await requireAuth(req);
+    uid = auth.uid;
+    await assertWithinRateLimit(
+      auth.uid,
+      "extractRc",
+      EXTRACT_RC_RATE_LIMIT_MAX,
+      EXTRACT_RC_RATE_WINDOW_MS
+    );
+
     const { base64Data, base64Image, mimeType, customPrompt } = req.body || {};
     const payloadData = base64Data || base64Image;
     const payloadMimeType = mimeType || "image/jpeg";
@@ -188,8 +380,19 @@ exports.extractRc = functions.https.onRequest(async (req, res) => {
       return;
     }
 
+    if (typeof payloadData !== "string" || payloadData.length > EXTRACT_RC_MAX_BASE64_CHARS) {
+      res.status(413).json({
+        error: "Payload too large",
+        maxChars: EXTRACT_RC_MAX_BASE64_CHARS,
+      });
+      return;
+    }
+
+    await deductAiCreditsOrThrow(uid, { source: "extractRc", phase: "pre_ai" });
+    debitedForThisRequest = true;
+
     const ai = createGenaiClient();
-    
+
     const prompt = `
       You are a highly accurate OCR and data extraction system for Vehicle Registration Certificates (RC).
       Analyze the provided image and extract all relevant vehicle information for a pre-printed form.
@@ -236,15 +439,31 @@ exports.extractRc = functions.https.onRequest(async (req, res) => {
     });
 
     const text = response.text;
-    const extractedData = JSON.parse(text || '{}');
-
-    await deductAiCreditsOrThrow(auth.uid, { source: "extractRc" });
+    const extractedData = JSON.parse(text || "{}");
 
     res.json(extractedData);
   } catch (error) {
+    if (debitedForThisRequest && uid) {
+      try {
+        await refundAiCredits(uid, {
+          label: "AI extraction refund (processing error)",
+          meta: {
+            source: "extractRc",
+            reason: error?.code || "error",
+            message: String(error?.message || "").slice(0, 500),
+          },
+        });
+      } catch (refundErr) {
+        logger.error("[extractRc] refund failed", { message: refundErr?.message });
+      }
+    }
     const code = Number(error?.code);
     if (code === 401) {
       res.status(401).json({ error: error.message || "Unauthorized" });
+      return;
+    }
+    if (code === 429) {
+      res.status(429).json({ error: error.message || "Too many requests" });
       return;
     }
     if (error?.code === "INSUFFICIENT_CREDITS") {
@@ -335,7 +554,11 @@ exports.verifyRazorpayPayment = functions.https.onRequest(async (req, res) => {
 
     const payload = `${razorpay_order_id}|${razorpay_payment_id}`;
     const expected = crypto.createHmac("sha256", keySecret).update(payload).digest("hex");
-    const ok = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(String(razorpay_signature)));
+    const sig = String(razorpay_signature).trim();
+    const ok =
+      expected.length === sig.length &&
+      expected.length > 0 &&
+      crypto.timingSafeEqual(Buffer.from(expected, "utf8"), Buffer.from(sig, "utf8"));
 
     if (!ok) {
       res.status(400).json({ ok: false, error: "Invalid signature" });
@@ -472,45 +695,172 @@ exports.getCreditHistory = functions.https.onRequest(async (req, res) => {
   }
 });
 
-exports.consumeCredits = functions.https.onRequest(async (req, res) => {
+/**
+ * Public init endpoint: anyone can call it.
+ * It makes the user with email === SUPER_ADMIN_EMAIL a super admin.
+ *
+ * Safeguards:
+ * - Idempotent: if a super admin already exists, it does nothing.
+ * - Does not trust request body; always uses env email.
+ *
+ * Route: /api/init (hosting rewrite)
+ */
+exports.initSuperAdmin = functions.https.onRequest(async (req, res) => {
   if (allowCors(req, res)) return;
-  if (req.method !== "POST") {
+  if (req.method !== "POST" && req.method !== "GET") {
+    res.status(405).send("Method Not Allowed");
+    return;
+  }
+  try {
+    const configured = getConfiguredSuperAdminEmail();
+    if (!configured) {
+      res.status(503).json({ ok: false, error: "SUPER_ADMIN_EMAIL is not configured" });
+      return;
+    }
+
+    if (await hasAnySuperAdmin()) {
+      res.json({ ok: true, initialized: false, reason: "super_admin_already_exists" });
+      return;
+    }
+
+    const user = await admin.auth().getUserByEmail(configured);
+    await getUserRef(user.uid).set(
+      {
+        superAdmin: true,
+        email: user.email || configured,
+        superAdminGrantedAt: FieldValue.serverTimestamp(),
+        superAdminInit: "public_api",
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    logger.warn("[admin] initSuperAdmin granted", { uid: user.uid, email: configured });
+    res.json({ ok: true, initialized: true, uid: user.uid, email: configured });
+  } catch (error) {
+    const status =
+      error?.code === "auth/user-not-found"
+        ? 404
+        : 500;
+    logger.error("[admin] initSuperAdmin error", { message: error?.message });
+    res.status(status).json({ ok: false, error: error?.message || "Failed to init super admin" });
+  }
+});
+
+/** Returns whether the current user is a super admin (API-only helper for UI). */
+exports.getAdminMe = functions.https.onRequest(async (req, res) => {
+  if (allowCors(req, res)) return;
+  if (req.method !== "GET") {
     res.status(405).send("Method Not Allowed");
     return;
   }
   try {
     const auth = await requireAuth(req);
-    const { cost } = req.body || {};
-    const nCost = Number(cost);
-    if (!Number.isFinite(nCost) || nCost <= 0) {
-      res.status(400).json({ ok: false, error: "Invalid cost" });
+    const snap = await getUserRef(auth.uid).get();
+    res.json({ ok: true, superAdmin: snap.data()?.superAdmin === true });
+  } catch (error) {
+    const code = Number(error?.code);
+    const status = code === 401 ? 401 : 500;
+    res.status(status).json({ ok: false, error: error?.message || "Failed to load admin status" });
+  }
+});
+
+/**
+ * API-only: grant credits to a user by email. Caller must have superAdmin on users/{uid} (via claimSuperAdmin).
+ */
+exports.adminGrantCredits = functions.https.onRequest(async (req, res) => {
+  if (allowCors(req, res)) return;
+  if (req.method !== "GET") {
+    res.status(405).send("Method Not Allowed");
+    return;
+  }
+  try {
+    const auth = await requireAuth(req);
+    if (!(await isSuperAdminUser(auth.uid))) {
+      res.status(403).json({ ok: false, error: "Super admin privileges required" });
       return;
     }
-    const db = getFirestore();
-    const userRef = getUserRef(auth.uid);
-    const result = await db.runTransaction(async (tx) => {
-      const snap = await tx.get(userRef);
-      const current = Number(snap.data()?.credits || 0);
-      if (!Number.isFinite(current) || current < nCost) {
-        return { ok: false, credits: Number.isFinite(current) ? current : 0 };
+
+    await assertWithinRateLimit(auth.uid, "adminGrantCredits", 120, 60_000);
+
+    const targetEmail = normalizeEmail(req.query?.email);
+    if (!targetEmail) {
+      res.status(400).json({ ok: false, error: "Missing or invalid email" });
+      return;
+    }
+    const creditsToAdd = Number.parseInt(String(req.query?.credits ?? ""), 10);
+    if (!Number.isFinite(creditsToAdd) || creditsToAdd < 1 || creditsToAdd > ADMIN_GRANT_MAX_PER_CALL) {
+      res.status(400).json({
+        ok: false,
+        error: `credits must be an integer between 1 and ${ADMIN_GRANT_MAX_PER_CALL}`,
+      });
+      return;
+    }
+
+    let targetUser;
+    try {
+      targetUser = await admin.auth().getUserByEmail(targetEmail);
+    } catch (e) {
+      if (e?.code === "auth/user-not-found") {
+        res.status(404).json({ ok: false, error: "No Firebase user with that email" });
+        return;
       }
-      const next = current - nCost;
-      tx.set(userRef, { credits: next, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
-      const ledgerRef = userRef.collection("creditLedger").doc();
+      throw e;
+    }
+
+    const targetUid = targetUser.uid;
+    const db = getFirestore();
+    const targetRef = getUserRef(targetUid);
+    const adminEmail = normalizeEmail(auth.email) || auth.uid;
+
+    const result = await db.runTransaction(async (tx) => {
+      const targetSnap = await tx.get(targetRef);
+      const currentCredits = Number(targetSnap.data()?.credits || 0);
+      const nextCredits = (Number.isFinite(currentCredits) ? currentCredits : 0) + creditsToAdd;
+      tx.set(
+        targetRef,
+        {
+          credits: nextCredits,
+          email: targetUser.email || targetEmail,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      const ledgerRef = targetRef.collection("creditLedger").doc();
       tx.set(ledgerRef, {
         createdAt: FieldValue.serverTimestamp(),
-        delta: -nCost,
-        balanceAfter: next,
-        type: "consume",
-        label: `Used ${nCost} credits`,
-        meta: {},
+        delta: creditsToAdd,
+        balanceAfter: nextCredits,
+        type: "admin_grant",
+        label: `Admin grant — +${creditsToAdd} credits`,
+        meta: {
+          grantedByUid: auth.uid,
+          grantedByEmail: adminEmail,
+          targetEmail,
+        },
       });
-      return { ok: true, credits: next };
+      return { credits: nextCredits };
     });
-    res.json(result);
+
+    logger.info("[admin] credits granted", {
+      grantedBy: auth.uid,
+      targetUid,
+      targetEmail,
+      credits: creditsToAdd,
+    });
+
+    res.json({
+      ok: true,
+      targetUid,
+      targetEmail,
+      credits: result.credits,
+      granted: creditsToAdd,
+    });
   } catch (error) {
-    const status = Number(error?.code) === 401 ? 401 : 500;
-    res.status(status).json({ ok: false, error: error?.message || "Failed to consume credits" });
+    const code = Number(error?.code);
+    const status = code === 401 ? 401 : code === 429 ? 429 : 500;
+    logger.error("[admin] adminGrantCredits error", { message: error?.message });
+    res.status(status).json({ ok: false, error: error?.message || "Failed to grant credits" });
   }
 });
 
@@ -520,14 +870,16 @@ const batchSubmissionRuntimeOpts = {
 };
 
 /**
- * Shared batch PDF → Gemini → deduct credits → mark processed.
- * Used by onCreate (new uploads) and onUpdate (retry after error / stuck processing).
+ * Shared batch PDF → bill (before AI) → Gemini → mark processed.
+ * Credits are held before Gemini so API quota cannot be farmed without balance.
  */
 async function runBatchSubmissionWorker(snap, submissionId) {
   const submission = snap.data();
   if (!submission || submission.status !== "pending") {
     return null;
   }
+
+  const batchUidEarly = String(submission.userId || "").trim();
 
   try {
     const startedAt = Date.now();
@@ -551,6 +903,11 @@ async function runBatchSubmissionWorker(snap, submissionId) {
       await snap.ref.update({
         leaseExpiresAtMs: Date.now() + PROCESSING_STUCK_AFTER_MS,
       });
+
+      const batchUid = batchUidEarly;
+      if (!batchUid) {
+        throw new Error("Missing userId on submission (required for AI billing)");
+      }
 
       const result = await withTimeout("batch_entry", BATCH_ENTRY_TIMEOUT_MS, async () => {
         const t0 = Date.now();
@@ -583,7 +940,17 @@ async function runBatchSubmissionWorker(snap, submissionId) {
           { pdfBytes, fetchMs: Date.now() - t0 }
         );
 
+        if (pdfBytes > MAX_BATCH_PDF_BYTES) {
+          throw new Error(`PDF too large (${pdfBytes} bytes, max ${MAX_BATCH_PDF_BYTES})`);
+        }
+
         const base64Data = Buffer.from(arrayBuffer).toString('base64');
+
+        const debitResult = await debitBatchSubmissionIfNeeded(snap.ref, submissionId, batchUid);
+        logLine("info", submissionId, "billing:debit", "ok", debitResult);
+        if (debitResult.alreadySettled) {
+          throw new Error("Submission already billed; unexpected state");
+        }
 
         const ai = createGenaiClient();
 
@@ -644,42 +1011,20 @@ async function runBatchSubmissionWorker(snap, submissionId) {
         return { extractedData, pdfBytes, totalMs: Date.now() - t0 };
       });
 
-      const batchUid = String(submission.userId || "").trim();
-      if (!batchUid) {
-        throw new Error("Missing userId on submission (required for AI billing)");
-      }
-      try {
-        await deductAiCreditsOrThrow(batchUid, { source: "batch_ai", batchSubmissionId: submissionId });
-        const balSnap = await getUserRef(batchUid).get();
-        const remaining = Number(balSnap.data()?.credits ?? 0);
-        logLine(
-          "info",
-          submissionId,
-          "billing",
-          `deducted=${AI_PROCESSING_CREDIT_COST} balance=${Number.isFinite(remaining) ? remaining : "?"}`,
-          { uid: batchUid, remaining }
-        );
-      } catch (deductErr) {
-        if (deductErr?.code === "INSUFFICIENT_CREDITS") {
-          await snap.ref.update({
-            status: "error",
-            errorCode: "INSUFFICIENT_CREDITS",
-            errorMessage:
-              deductErr.message ||
-              `Insufficient credits for AI processing (need ${AI_PROCESSING_CREDIT_COST} per file)`,
-            failedAt: FieldValue.serverTimestamp(),
-            leaseExpiresAt: null,
-            leaseExpiresAtMs: null,
-            updatedAt: FieldValue.serverTimestamp(),
-          });
-          return null;
-        }
-        throw deductErr;
-      }
+      const balSnap = await getUserRef(batchUid).get();
+      const remaining = Number(balSnap.data()?.credits ?? 0);
+      logLine(
+        "info",
+        submissionId,
+        "billing",
+        `balance_after_debit=${Number.isFinite(remaining) ? remaining : "?"}`,
+        { uid: batchUid, remaining }
+      );
 
       await snap.ref.update({
         status: 'processed',
         extractedData: result.extractedData,
+        aiBillingState: 'settled',
         processedAt: FieldValue.serverTimestamp(),
         leaseExpiresAt: null,
         leaseExpiresAtMs: null,
@@ -711,8 +1056,10 @@ async function runBatchSubmissionWorker(snap, submissionId) {
         `${code ? `${code}: ` : ""}${message}`,
         { fileName: submission?.fileName, code, message, stack: error?.stack }
       );
-      
-      await snap.ref.update({
+
+      await refundBatchAiIfDebited(snap.ref, submissionId, batchUidEarly);
+
+      let errorUpdate = {
         status: 'error',
         errorMessage: code ? `${code}: ${message}` : message,
         errorCode: code || null,
@@ -720,7 +1067,17 @@ async function runBatchSubmissionWorker(snap, submissionId) {
         leaseExpiresAt: null,
         leaseExpiresAtMs: null,
         updatedAt: FieldValue.serverTimestamp(),
-      });
+      };
+      if (code === "INSUFFICIENT_CREDITS") {
+        errorUpdate = {
+          ...errorUpdate,
+          errorCode: "INSUFFICIENT_CREDITS",
+          errorMessage:
+            message || `Insufficient credits for AI processing (need ${AI_PROCESSING_CREDIT_COST} per file)`,
+        };
+      }
+      
+      await snap.ref.update(errorUpdate);
     }
 
     return null;
@@ -768,6 +1125,11 @@ exports.sweepStuckBatchSubmissions = functions.pubsub
 
     const batch = db.batch();
     for (const docSnap of qSnap.docs) {
+      const data = docSnap.data() || {};
+      const uid = String(data.userId || "").trim();
+      if (data.aiBillingState === "debited" && uid) {
+        await refundBatchAiIfDebited(docSnap.ref, docSnap.id, uid);
+      }
       batch.update(docSnap.ref, {
         status: "error",
         errorCode: "TIMEOUT",

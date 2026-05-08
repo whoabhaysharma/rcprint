@@ -8,14 +8,14 @@ import { jsPDF } from 'jspdf';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   RotateCcw, ShieldCheck, CheckCircle2, Printer,
-  ZoomIn, ZoomOut, LayoutGrid, Coins, Plus, FileText, History,
+  ZoomIn, ZoomOut, LayoutGrid, Coins, Plus, FileText, History, LogOut,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 import confetti from 'canvas-confetti';
 import { FirebaseError } from 'firebase/app';
 import { auth, provider, db } from './firebase';
-import { signInWithPopup, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
+import { signInWithPopup, onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import BatchUpload from './BatchUpload';
 import BatchListView from './BatchListView';
@@ -24,6 +24,12 @@ import { useMessageDialog } from './components/message-dialog';
 import { AI_EXTRACTION_CREDIT_COST } from './constants/credits';
 import rcPreviewBgImage from './image.jpg';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/src/components/ui/dialog';
 
 
 interface FormData {
@@ -236,6 +242,12 @@ export default function App() {
   const [creditsLoading, setCreditsLoading] = useState(false);
   const [showPlans, setShowPlans] = useState(false);
   const [creditHistoryOpen, setCreditHistoryOpen] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [grantEmail, setGrantEmail] = useState('');
+  const [grantCredits, setGrantCredits] = useState('100');
+  const [grantSubmitting, setGrantSubmitting] = useState(false);
   const [signature, setSignature] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const [isLayoutEditing, setIsLayoutEditing] = useState(false);
@@ -251,6 +263,11 @@ export default function App() {
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setAuthLoading(false);
+      if (!u) {
+        setCreditHistoryOpen(false);
+        setAdminOpen(false);
+        setShowPlans(false);
+      }
     });
     return unsub;
   }, []);
@@ -282,6 +299,33 @@ export default function App() {
     void refreshCredits(user);
   }, [user]);
 
+  const refreshAdminStatus = async (u: FirebaseUser | null) => {
+    if (!u) {
+      setIsSuperAdmin(false);
+      return;
+    }
+    setAdminLoading(true);
+    try {
+      const token = await u.getIdToken();
+      const res = await fetch('/api/admin/me', {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = (await res.json()) as { superAdmin?: boolean };
+      setIsSuperAdmin(data.superAdmin === true);
+    } catch (e) {
+      console.warn('Failed to refresh admin status', e);
+      setIsSuperAdmin(false);
+    } finally {
+      setAdminLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshAdminStatus(user);
+  }, [user]);
+
   useEffect(() => {
     const el = document.documentElement;
     if (view === 'form' || view === 'preview') {
@@ -299,7 +343,7 @@ export default function App() {
     if (creditsLoading) return;
     if (credits < AI_EXTRACTION_CREDIT_COST) {
       showMessage(
-        `Batch AI processing uses ${AI_EXTRACTION_CREDIT_COST} credits per PDF after each file is processed successfully. Purchase credits to upload a batch.`,
+        `Batch AI uses ${AI_EXTRACTION_CREDIT_COST} credits per PDF (debited when each file is processed; you are refunded if extraction fails). Purchase credits to continue.`,
         'Insufficient credits',
       );
       setShowPlans(true);
@@ -623,7 +667,7 @@ export default function App() {
                     <span className="font-black text-slate-900">Manual entry</span> includes free PDF download and print.
                     {' '}
                     <span className="font-black text-slate-900">Batch AI</span> uses{' '}
-                    <span className="font-black text-slate-900">{AI_EXTRACTION_CREDIT_COST} credits</span> per document only after successful processing (failed runs are not charged).
+                    <span className="font-black text-slate-900">{AI_EXTRACTION_CREDIT_COST} credits</span> per document (debited when extraction runs; refunded automatically if it fails).
                   </p>
                 </div>
                 <button
@@ -681,6 +725,98 @@ export default function App() {
 
       <CreditHistoryDialog open={creditHistoryOpen} onOpenChange={setCreditHistoryOpen} user={user} />
 
+      <Dialog open={adminOpen} onOpenChange={setAdminOpen}>
+        <DialogContent className="max-w-lg gap-0 overflow-hidden p-0 sm:rounded-[2rem]">
+          <DialogHeader className="shrink-0 border-b border-slate-100 p-6 pb-4">
+            <DialogTitle className="text-xl font-black tracking-tight text-slate-900">Admin — Grant credits</DialogTitle>
+          </DialogHeader>
+          <div className="p-6 space-y-4">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-bold text-slate-700">
+              This panel is visible only to super admins.
+            </div>
+
+            <label className="block">
+              <span className="block text-[11px] font-black uppercase tracking-widest text-slate-500 mb-2">
+                Recipient email
+              </span>
+              <input
+                value={grantEmail}
+                onChange={(e) => setGrantEmail(e.target.value)}
+                placeholder="user@example.com"
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:ring-2 focus:ring-blue-200"
+              />
+            </label>
+
+            <label className="block">
+              <span className="block text-[11px] font-black uppercase tracking-widest text-slate-500 mb-2">
+                Credits to add
+              </span>
+              <input
+                value={grantCredits}
+                onChange={(e) => setGrantCredits(e.target.value)}
+                inputMode="numeric"
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:ring-2 focus:ring-blue-200"
+              />
+            </label>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setAdminOpen(false)}
+                className="flex-1 rounded-2xl border border-slate-200 bg-white py-3 text-xs font-black uppercase tracking-widest text-slate-700 hover:bg-slate-50"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                disabled={!user || grantSubmitting}
+                onClick={async () => {
+                  if (!user) return;
+                  const email = grantEmail.trim();
+                  const creditsToAdd = Number.parseInt(grantCredits.trim(), 10);
+                  if (!email) {
+                    showMessage('Enter a recipient email.', 'Missing email');
+                    return;
+                  }
+                  if (!Number.isFinite(creditsToAdd) || creditsToAdd < 1) {
+                    showMessage('Enter a valid credits amount (integer >= 1).', 'Invalid credits');
+                    return;
+                  }
+                  setGrantSubmitting(true);
+                  try {
+                    const token = await user.getIdToken();
+                    const params = new URLSearchParams({ email, credits: String(creditsToAdd) });
+                    const res = await fetch(`/api/admin/grantCredits?${params}`, {
+                      method: 'GET',
+                      headers: { Authorization: `Bearer ${token}` },
+                    });
+                    if (!res.ok) throw new Error(await res.text());
+                    const data = (await res.json()) as { granted?: number; targetEmail?: string; credits?: number };
+                    showMessage(
+                      `Granted ${Number(data.granted || 0)} credits to ${data.targetEmail || email}.\nNew balance: ${Number(data.credits || 0)} credits.`,
+                      'Credits granted',
+                    );
+                    setGrantEmail('');
+                    void refreshCredits(user);
+                  } catch (e) {
+                    showMessage((e as Error)?.message || 'Failed to grant credits', 'Admin error');
+                  } finally {
+                    setGrantSubmitting(false);
+                  }
+                }}
+                className="flex-1 rounded-2xl bg-slate-900 py-3 text-xs font-black uppercase tracking-widest text-white hover:bg-black disabled:opacity-60"
+              >
+                {grantSubmitting ? 'Granting…' : 'Grant'}
+              </button>
+            </div>
+
+            {adminLoading ? (
+              <div className="text-xs font-bold text-slate-400">Checking admin status…</div>
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <header
         className="sticky top-0 z-[60] shrink-0 no-print border-b border-slate-200/90 bg-white/95 backdrop-blur-xl supports-[backdrop-filter]:bg-white/80"
         role="banner"
@@ -730,6 +866,17 @@ export default function App() {
               <History size={14} className="shrink-0" />
               <span className="max-[380px]:sr-only">History</span>
             </button>
+            {isSuperAdmin ? (
+              <button
+                type="button"
+                onClick={() => setAdminOpen(true)}
+                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl border border-slate-200 bg-white text-[10px] sm:text-[11px] font-black uppercase tracking-widest text-slate-600 hover:bg-slate-50 transition-colors active:scale-[0.98]"
+                title="Admin panel"
+              >
+                <ShieldCheck size={14} className="shrink-0" />
+                <span className="max-[380px]:sr-only">Admin</span>
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => setShowPlans(true)}
@@ -737,6 +884,21 @@ export default function App() {
             >
               <Plus size={12} strokeWidth={3} />
               Buy
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await signOut(auth);
+                } catch (e) {
+                  showMessage((e as Error)?.message || 'Failed to log out', 'Logout');
+                }
+              }}
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl border border-slate-200 bg-white text-[10px] sm:text-[11px] font-black uppercase tracking-widest text-slate-600 hover:bg-slate-50 transition-colors active:scale-[0.98]"
+              title="Log out"
+            >
+              <LogOut size={14} className="shrink-0" />
+              <span className="max-[380px]:sr-only">Logout</span>
             </button>
           </div>
         </div>
@@ -762,7 +924,7 @@ export default function App() {
                   <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center rounded-[2.5rem] border-[3px] border-dashed border-green-200 bg-green-50 group-hover:bg-green-100 transition-all">
                     <LayoutGrid size={40} className="text-green-600 mb-4" />
                     <h3 className="text-xl font-black text-slate-900 mb-2">Batch processing</h3>
-                    <p className="text-sm text-slate-500 font-medium">AI on multiple PDFs (credits per successful file)</p>
+                    <p className="text-sm text-slate-500 font-medium">AI on multiple PDFs (per file; failures refunded)</p>
                   </div>
                 </button>
 

@@ -240,38 +240,66 @@ export default defineConfig(({mode}) => {
             }
           });
 
-          server.middlewares.use('/api/credits/consume', async (req, res) => {
-            if (req.method !== 'POST') {
-              res.statusCode = 405;
-              return res.end('Method Not Allowed');
-            }
-            if (!functionsBaseUrl) {
-              res.statusCode = 500;
-              return res.end('Missing Firebase project id (.firebaserc)');
-            }
-            let body = '';
-            req.on('data', chunk => { body += chunk.toString(); });
-            req.on('end', async () => {
-              try {
-                const upstream = await fetch(`${functionsBaseUrl}/consumeCredits`, {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: String(req.headers.authorization || ''),
-                  },
-                  body,
-                });
-                const text = await upstream.text();
-                res.statusCode = upstream.status;
-                res.setHeader('Content-Type', upstream.headers.get('content-type') || 'application/json');
-                res.end(text);
-              } catch (err: any) {
-                res.statusCode = 500;
-                res.setHeader('Content-Type', 'application/json');
-                res.end(JSON.stringify({ error: err?.message || 'Failed to call functions emulator' }));
+          const proxyToFunction = (path: string, functionName: string, method: 'GET' | 'POST') => {
+            server.middlewares.use(path, async (req, res) => {
+              if (req.method !== method) {
+                res.statusCode = 405;
+                return res.end('Method Not Allowed');
               }
+              if (!functionsBaseUrl) {
+                res.statusCode = 500;
+                return res.end('Missing Firebase project id (.firebaserc)');
+              }
+              const u = new URL(req.url || '/', 'http://vite.local');
+              const qs = u.search || '';
+              if (method === 'GET') {
+                try {
+                  const upstream = await fetch(`${functionsBaseUrl}/${functionName}${qs}`, {
+                    method: 'GET',
+                    headers: { Authorization: String(req.headers.authorization || '') },
+                  });
+                  const text = await upstream.text();
+                  res.statusCode = upstream.status;
+                  res.setHeader('Content-Type', upstream.headers.get('content-type') || 'application/json');
+                  res.end(text);
+                } catch (err: any) {
+                  res.statusCode = 500;
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify({ error: err?.message || 'Failed to call functions emulator' }));
+                }
+                return;
+              }
+
+              let body = '';
+              req.on('data', (chunk) => {
+                body += chunk.toString();
+              });
+              req.on('end', async () => {
+                try {
+                  const upstream = await fetch(`${functionsBaseUrl}/${functionName}${qs}`, {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      Authorization: String(req.headers.authorization || ''),
+                    },
+                    body: body || '{}',
+                  });
+                  const text = await upstream.text();
+                  res.statusCode = upstream.status;
+                  res.setHeader('Content-Type', upstream.headers.get('content-type') || 'application/json');
+                  res.end(text);
+                } catch (err: any) {
+                  res.statusCode = 500;
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify({ error: err?.message || 'Failed to call functions emulator' }));
+                }
+              });
             });
-          });
+          };
+
+          proxyToFunction('/api/init', 'initSuperAdmin', 'POST');
+          proxyToFunction('/api/admin/grantCredits', 'adminGrantCredits', 'GET');
+          proxyToFunction('/api/admin/me', 'getAdminMe', 'GET');
 
         }
       }

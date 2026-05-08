@@ -1,6 +1,16 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Server-only (Cloud Functions admin SDK) abuse-prevention counters; never expose to clients.
+    match /_rateLimits/{docId} {
+      allow read, write: if false;
+    }
+
+    // Users bucket (credits, admin flags) — Cloud Functions / Admin SDK only.
+    match /users/{userId} {
+      allow read, write: if false;
+    }
+
     // Credit ledger — server-written; clients may read their own rows only.
     match /users/{userId}/creditLedger/{entryId} {
       allow read: if request.auth != null && request.auth.uid == userId;

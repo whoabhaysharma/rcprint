@@ -52,7 +52,7 @@ export default function BatchUpload({
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!canUseBatch) {
       showMessage(
-        `Batch upload needs at least ${AI_EXTRACTION_CREDIT_COST} credits per PDF you queue (${AI_EXTRACTION_CREDIT_COST} credits deducted only after each file is processed successfully).`,
+        `Batch upload needs ${AI_EXTRACTION_CREDIT_COST} credits in balance per PDF. Each file is debited when processing starts; if extraction fails, credits are refunded automatically.`,
         'Credits required',
       );
       onRequestCredits();
@@ -119,7 +119,7 @@ export default function BatchUpload({
 
     if (!canUseBatch || credits < files.length * AI_EXTRACTION_CREDIT_COST) {
       showMessage(
-        `You need ${files.length * AI_EXTRACTION_CREDIT_COST} credits for ${files.length} file(s) (${AI_EXTRACTION_CREDIT_COST} per successful processing). You have ${credits}.`,
+        `You need ${files.length * AI_EXTRACTION_CREDIT_COST} credits in balance for ${files.length} file(s) (${AI_EXTRACTION_CREDIT_COST} per file). You have ${credits}. Failed extractions are refunded automatically.`,
         'Insufficient credits',
       );
       onRequestCredits();
@@ -200,7 +200,7 @@ export default function BatchUpload({
             Batch Upload
           </h1>
           <p className="text-slate-500 font-medium">
-            Upload up to {MAX_FILES} RC PDFs for AI processing ({AI_EXTRACTION_CREDIT_COST} credits per file, charged only after successful extraction)
+            Upload up to {MAX_FILES} RC PDFs for AI processing ({AI_EXTRACTION_CREDIT_COST} credits per file; debited when processing runs, refunded if extraction fails)
           </p>
         </div>
 
