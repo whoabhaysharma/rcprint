@@ -148,7 +148,6 @@ function userFacingAuthOrNetworkError(err: unknown): string {
 const CARD_WIDTH_MM = 85.6;
 const CARD_HEIGHT_MM = 53.98;
 const CARD_ASPECT = CARD_WIDTH_MM / CARD_HEIGHT_MM;
-const CARD_MOCKUP_URL = 'https://file60.b-cdn.net/card-mockup.png';
 const LAYOUT_STORAGE_KEY = 'rc_calibration_layout';
 const TEMPLATE_STORAGE_KEY = 'rc_global_template_layout';
 /** Mfg date + regd validity: toward mockup labels (card inches). */
@@ -1333,13 +1332,6 @@ function CardPreview({
             setFontSizingField(null);
           }}
         >
-          <img
-            src={CARD_MOCKUP_URL}
-            alt="RC card mockup"
-            className="absolute inset-0 z-[1] w-full h-full object-cover pointer-events-none"
-            draggable={false}
-            crossOrigin="anonymous"
-          />
           {resolved.map((f, i) => {
           const left = f.x * PREVIEW_PPI;
           const top  = f.y * PREVIEW_PPI;

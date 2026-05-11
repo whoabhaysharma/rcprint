@@ -73,8 +73,26 @@ const allowCors = (req, res) => {
   return false;
 };
 
+const getRuntimeConfigValue = (name) => {
+  // Firebase Functions runtime config (set via `firebase functions:config:set ...`)
+  // Docs: https://firebase.google.com/docs/functions/config-env
+  const cfg = typeof functions.config === "function" ? functions.config() : {};
+  switch (name) {
+    case "RAZORPAY_KEY_ID":
+      return cfg?.razorpay?.key_id;
+    case "RAZORPAY_KEY_SECRET":
+      return cfg?.razorpay?.key_secret;
+    case "GEMINI_API_KEY":
+      return cfg?.gemini?.api_key;
+    case "SUPER_ADMIN_EMAIL":
+      return cfg?.admin?.super_admin_email;
+    default:
+      return undefined;
+  }
+};
+
 const requireEnv = (name) => {
-  const value = process.env[name];
+  const value = process.env[name] || getRuntimeConfigValue(name);
   if (!value) throw new Error(`Missing env var: ${name}`);
   return value;
 };
