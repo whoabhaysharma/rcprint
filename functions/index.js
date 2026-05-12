@@ -97,6 +97,35 @@ const requireEnv = (name) => {
   return value;
 };
 
+/** Firebase sets this when the Functions emulator is running — use Razorpay test keys only then. */
+const useRazorpayTestKeys = () => process.env.FUNCTIONS_EMULATOR === "true";
+
+const getRazorpayKeyId = () => {
+  if (useRazorpayTestKeys()) {
+    const v = process.env.RAZORPAY_TEST_KEY_ID;
+    if (!v) {
+      throw new Error(
+        "Razorpay (emulator): set RAZORPAY_TEST_KEY_ID and RAZORPAY_TEST_KEY_SECRET in functions/.env — see functions/.env.example"
+      );
+    }
+    return v;
+  }
+  return requireEnv("RAZORPAY_KEY_ID");
+};
+
+const getRazorpayKeySecret = () => {
+  if (useRazorpayTestKeys()) {
+    const v = process.env.RAZORPAY_TEST_KEY_SECRET;
+    if (!v) {
+      throw new Error(
+        "Razorpay (emulator): set RAZORPAY_TEST_KEY_SECRET in functions/.env — see functions/.env.example"
+      );
+    }
+    return v;
+  }
+  return requireEnv("RAZORPAY_KEY_SECRET");
+};
+
 /**
  * Use the Gemini Developer API with an API key only.
  * If GEMINI_API_KEY is missing, @google/genai may use Application Default Credentials (emulator / gcloud)
@@ -153,6 +182,23 @@ const getConfiguredSuperAdminEmail = () => {
 };
 
 const ADMIN_GRANT_MAX_PER_CALL = asInt(process.env.ADMIN_GRANT_MAX_PER_CALL, 50_000);
+
+/** Public POST /add-credits UI: max credits per request (multiple of 50). */
+const PUBLIC_CREDIT_TOPUP_MAX = asInt(process.env.PUBLIC_CREDIT_TOPUP_MAX, 50_000);
+
+/** Set PUBLIC_CREDIT_TOPUP_ENABLED=false or 0 to disable public /add-credits Razorpay order + verify. */
+const isPublicCreditTopupEnabled = () => {
+  const v = process.env.PUBLIC_CREDIT_TOPUP_ENABLED;
+  if (v === undefined || v === "") return true;
+  const s = String(v).trim().toLowerCase();
+  return s !== "false" && s !== "0" && s !== "no";
+};
+
+/** INR charged per credit on the public add-credits page (default 1 → 50 credits = ₹50). */
+const getPublicTopupInrPerCredit = () => {
+  const n = Number(process.env.PUBLIC_TOPUP_INR_PER_CREDIT ?? 1);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+};
 
 const isSuperAdminUser = async (uid) => {
   const snap = await getUserRef(uid).get();
@@ -525,8 +571,8 @@ exports.createRazorpayOrder = functions.https.onRequest(async (req, res) => {
 
   try {
     const auth = await requireAuth(req);
-    const keyId = requireEnv("RAZORPAY_KEY_ID");
-    const keySecret = requireEnv("RAZORPAY_KEY_SECRET");
+    const keyId = getRazorpayKeyId();
+    const keySecret = getRazorpayKeySecret();
 
     const { planInr, currency = "INR", notes } = req.body || {};
     const planKey = Number(planInr);
@@ -582,7 +628,7 @@ exports.verifyRazorpayPayment = functions.https.onRequest(async (req, res) => {
 
   try {
     const auth = await requireAuth(req);
-    const keySecret = requireEnv("RAZORPAY_KEY_SECRET");
+    const keySecret = getRazorpayKeySecret();
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
       res.status(400).json({ ok: false, error: "Missing Razorpay fields" });
@@ -610,6 +656,13 @@ exports.verifyRazorpayPayment = functions.https.onRequest(async (req, res) => {
       const orderSnap = await tx.get(orderRef);
       if (!orderSnap.exists) throw new Error("Unknown order");
       const orderData = orderSnap.data() || {};
+      if (orderData.publicTopup === true) {
+        const err = new Error(
+          "This order was created on the public add-credits page — finish verification from that checkout."
+        );
+        err.code = 400;
+        throw err;
+      }
       if (orderData.uid !== auth.uid) {
         const err = new Error("Order does not belong to user");
         err.code = 403;
@@ -662,6 +715,232 @@ exports.verifyRazorpayPayment = functions.https.onRequest(async (req, res) => {
     const status = Number(error?.code) === 401 ? 401 : Number(error?.code) === 403 ? 403 : 500;
     res.status(status).json({ ok: false, error: error?.message || "Failed to verify payment" });
   }
+});
+
+/**
+ * Public /add-credits: create Razorpay order for an existing Auth user (resolved by email).
+ * Credits: multiple of 50, min 50. Charge = credits × PUBLIC_TOPUP_INR_PER_CREDIT (default ₹1/credit).
+ */
+exports.createPublicRazorpayOrder = functions.https.onRequest(async (req, res) => {
+  if (allowCors(req, res)) return;
+  if (req.method !== "POST") {
+    res.status(405).send("Method Not Allowed");
+    return;
+  }
+  if (!isPublicCreditTopupEnabled()) {
+    res.status(403).json({ error: "Public credit purchase is disabled" });
+    return;
+  }
+
+  try {
+    const fwd = req.get("x-forwarded-for");
+    const rawIp =
+      (fwd && String(fwd).split(",")[0].trim()) ||
+      req.ip ||
+      req.connection?.remoteAddress ||
+      "unknown";
+    const ipKey = `pub_rzp_ip_${rawIp}`;
+    await assertWithinRateLimit(ipKey, "createPublicRazorpayOrderIp", 60, 3_600_000);
+
+    const keyId = getRazorpayKeyId();
+    const keySecret = getRazorpayKeySecret();
+
+    const body = req.body || {};
+    const targetEmail = normalizeEmail(body.email);
+    const creditsToAdd = Number.parseInt(String(body.credits ?? ""), 10);
+
+    if (!targetEmail || !targetEmail.includes("@")) {
+      res.status(400).json({ error: "Enter a valid email address" });
+      return;
+    }
+
+    await assertWithinRateLimit(`pub_rzp_em_${targetEmail}`, "createPublicRazorpayOrderEmail", 40, 3_600_000);
+
+    if (
+      !Number.isFinite(creditsToAdd) ||
+      creditsToAdd < 50 ||
+      creditsToAdd % 50 !== 0 ||
+      creditsToAdd > PUBLIC_CREDIT_TOPUP_MAX
+    ) {
+      res.status(400).json({
+        error: `Credits must be a multiple of 50, at least 50, and at most ${PUBLIC_CREDIT_TOPUP_MAX}`,
+      });
+      return;
+    }
+
+    let targetUser;
+    try {
+      targetUser = await admin.auth().getUserByEmail(targetEmail);
+    } catch (e) {
+      if (e?.code === "auth/user-not-found") {
+        res.status(404).json({ error: "No account found with that email" });
+        return;
+      }
+      throw e;
+    }
+
+    const inrPerCredit = getPublicTopupInrPerCredit();
+    const amountInr = creditsToAdd * inrPerCredit;
+    const amountPaise = Math.round(amountInr * 100);
+    if (!Number.isFinite(amountPaise) || amountPaise < 100) {
+      res.status(400).json({ error: "Invalid payment amount" });
+      return;
+    }
+
+    const razorpay = new Razorpay({ key_id: keyId, key_secret: keySecret });
+    const receipt = `p_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
+    const order = await razorpay.orders.create({
+      amount: amountPaise,
+      currency: "INR",
+      receipt,
+      notes: {
+        uid: targetUser.uid,
+        email: targetEmail,
+        credits: String(creditsToAdd),
+        amountInr: String(amountInr),
+        publicTopup: "true",
+      },
+    });
+
+    await getFirestore()
+      .collection("razorpayOrders")
+      .doc(order.id)
+      .set({
+        uid: targetUser.uid,
+        email: targetEmail,
+        planInr: amountInr,
+        credits: creditsToAdd,
+        status: "created",
+        receipt: order.receipt || receipt,
+        publicTopup: true,
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+
+    res.json({ order, keyId, credits: creditsToAdd, amountInr });
+  } catch (error) {
+    const code = Number(error?.code);
+    const status = code === 429 ? 429 : 500;
+    const msg = error?.message || String(error);
+    logger.error(`[razorpay] createPublicOrder error: ${msg}`, { stack: error?.stack });
+    res.status(status).json({ error: msg || "Failed to create order" });
+  }
+});
+
+/** Verify Razorpay payment for orders created via createPublicRazorpayOrder (no Firebase login). */
+exports.verifyPublicRazorpayPayment = functions.https.onRequest(async (req, res) => {
+  if (allowCors(req, res)) return;
+  if (req.method !== "POST") {
+    res.status(405).send("Method Not Allowed");
+    return;
+  }
+
+  try {
+    const keySecret = getRazorpayKeySecret();
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      res.status(400).json({ ok: false, error: "Missing Razorpay fields" });
+      return;
+    }
+
+    const payload = `${razorpay_order_id}|${razorpay_payment_id}`;
+    const expected = crypto.createHmac("sha256", keySecret).update(payload).digest("hex");
+    const sig = String(razorpay_signature).trim();
+    const ok =
+      expected.length === sig.length &&
+      expected.length > 0 &&
+      crypto.timingSafeEqual(Buffer.from(expected, "utf8"), Buffer.from(sig, "utf8"));
+
+    if (!ok) {
+      res.status(400).json({ ok: false, error: "Invalid signature" });
+      return;
+    }
+
+    const db = getFirestore();
+    const orderRef = db.collection("razorpayOrders").doc(String(razorpay_order_id));
+
+    const result = await db.runTransaction(async (tx) => {
+      const orderSnap = await tx.get(orderRef);
+      if (!orderSnap.exists) throw new Error("Unknown order");
+      const orderData = orderSnap.data() || {};
+      if (orderData.publicTopup !== true) {
+        const err = new Error("Order is not a public top-up order");
+        err.code = 403;
+        throw err;
+      }
+
+      const targetUid = String(orderData.uid || "").trim();
+      if (!targetUid) throw new Error("Invalid order");
+
+      const userRef = getUserRef(targetUid);
+
+      if (orderData.status === "credited") {
+        const userSnap = await tx.get(userRef);
+        const credits = Number(userSnap.data()?.credits || 0);
+        return { alreadyCredited: true, credits };
+      }
+
+      const creditsToAdd = Number(orderData.credits || 0);
+      if (!Number.isFinite(creditsToAdd) || creditsToAdd <= 0) throw new Error("Invalid order credits");
+
+      const userSnap = await tx.get(userRef);
+      const currentCredits = Number(userSnap.data()?.credits || 0);
+      const nextCredits = currentCredits + creditsToAdd;
+      tx.set(userRef, { credits: nextCredits, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+
+      const ledgerRef = userRef.collection("creditLedger").doc();
+      tx.set(ledgerRef, {
+        createdAt: FieldValue.serverTimestamp(),
+        delta: creditsToAdd,
+        balanceAfter: nextCredits,
+        type: "purchase",
+        label: `Purchase — +${creditsToAdd} credits`,
+        meta: {
+          orderId: String(razorpay_order_id),
+          paymentId: String(razorpay_payment_id),
+          planInr: orderData.planInr,
+          publicTopup: true,
+          email: orderData.email || null,
+        },
+      });
+
+      tx.set(
+        orderRef,
+        {
+          status: "credited",
+          razorpay_payment_id: String(razorpay_payment_id),
+          creditedAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      return { alreadyCredited: false, credits: nextCredits };
+    });
+
+    res.json({ ok: true, credits: result.credits, alreadyCredited: result.alreadyCredited });
+  } catch (error) {
+    logger.error("[razorpay] verifyPublicPayment error", { message: error?.message, stack: error?.stack });
+    const code = Number(error?.code);
+    const status = code === 403 ? 403 : 500;
+    res.status(status).json({ ok: false, error: error?.message || "Failed to verify payment" });
+  }
+});
+
+/**
+ * Legacy URL — credits are no longer added without Razorpay. Responds 410 so older clients
+ * (or cached bundles) get a clear JSON message instead of a missing-function 500.
+ */
+exports.publicCreditTopup = functions.https.onRequest(async (req, res) => {
+  if (allowCors(req, res)) return;
+  if (req.method !== "POST") {
+    res.status(405).send("Method Not Allowed");
+    return;
+  }
+  res.status(410).json({
+    ok: false,
+    error:
+      "Credits require Razorpay checkout. POST /api/razorpay/createPublicOrder with { email, credits }, pay in Razorpay, then POST /api/razorpay/verifyPublicPayment with razorpay_order_id, razorpay_payment_id, razorpay_signature. Rebuild the app if you still see this.",
+  });
 });
 
 exports.getMyCredits = functions.https.onRequest(async (req, res) => {

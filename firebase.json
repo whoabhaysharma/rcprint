@@ -49,6 +49,21 @@
         "region": "us-central1"
       },
       {
+        "source": "/api/credits/publicTopup",
+        "function": "publicCreditTopup",
+        "region": "us-central1"
+      },
+      {
+        "source": "/api/razorpay/createPublicOrder",
+        "function": "createPublicRazorpayOrder",
+        "region": "us-central1"
+      },
+      {
+        "source": "/api/razorpay/verifyPublicPayment",
+        "function": "verifyPublicRazorpayPayment",
+        "region": "us-central1"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }
@@ -85,6 +100,9 @@
     },
     "storage": {
       "port": 9199
+    },
+    "hosting": {
+      "port": 5000
     },
     "ui": {
       "enabled": true,

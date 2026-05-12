@@ -327,6 +327,9 @@ export default defineConfig(({mode}) => {
           proxyToFunction('/api/init', 'initSuperAdmin', 'POST');
           proxyToFunction('/api/admin/grantCredits', 'adminGrantCredits', 'GET');
           proxyToFunction('/api/admin/me', 'getAdminMe', 'GET');
+          proxyToFunction('/api/razorpay/createPublicOrder', 'createPublicRazorpayOrder', 'POST');
+          proxyToFunction('/api/razorpay/verifyPublicPayment', 'verifyPublicRazorpayPayment', 'POST');
+          proxyToFunction('/api/credits/publicTopup', 'publicCreditTopup', 'POST');
 
         }
       }
