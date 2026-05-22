@@ -5,6 +5,7 @@
 
 import * as React from 'react';
 import type { User } from 'firebase/auth';
+import { track } from '../analytics';
 import {
   Dialog,
   DialogContent,
@@ -66,6 +67,7 @@ export function CreditHistoryDialog({
 
   React.useEffect(() => {
     if (!open) return;
+    track('ve_credit_history_open');
     let cancelled = false;
     (async () => {
       setLoading(true);
@@ -74,9 +76,15 @@ export function CreditHistoryDialog({
       setPageIndex(0);
       try {
         const first = await loadPage('');
-        if (!cancelled) setPages([first]);
+        if (!cancelled) {
+          setPages([first]);
+          track('ve_credit_history_load_ok', { rows: first.items.length });
+        }
       } catch (e) {
-        if (!cancelled) setError((e as Error)?.message || 'Failed to load history');
+        if (!cancelled) {
+          track('ve_credit_history_load_fail');
+          setError((e as Error)?.message || 'Failed to load history');
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -91,9 +99,11 @@ export function CreditHistoryDialog({
   const goNext = async () => {
     if (!current?.nextCursor) return;
     if (pages[pageIndex + 1]) {
+      track('ve_credit_history_page_next', { cached: 1 });
       setPageIndex((i) => i + 1);
       return;
     }
+    track('ve_credit_history_page_next', { cached: 0 });
     setLoading(true);
     setError(null);
     try {
@@ -108,7 +118,10 @@ export function CreditHistoryDialog({
   };
 
   const goPrev = () => {
-    if (pageIndex > 0) setPageIndex((i) => i - 1);
+    if (pageIndex > 0) {
+      track('ve_credit_history_page_prev');
+      setPageIndex((i) => i - 1);
+    }
   };
 
   const fmtDate = (ms: number | null) =>

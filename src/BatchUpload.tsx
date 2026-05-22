@@ -10,6 +10,7 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { storage, db } from './firebase';
 import type { User as FirebaseUser } from 'firebase/auth';
+import { track } from './analytics';
 import { useMessageDialog } from './components/message-dialog';
 import { AI_EXTRACTION_CREDIT_COST } from './constants/credits';
 
@@ -50,7 +51,10 @@ export default function BatchUpload({
   const hasEnoughCreditsForQueue = credits >= creditsNeededForQueue;
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = Array.from(e.target.files || []).length;
+    track('ve_batch_file_picker_change', { picked_count: picked });
     if (!canUseBatch) {
+      track('ve_batch_file_select_blocked', { reason: 'no_credits' });
       showMessage(
         `Batch upload needs ${AI_EXTRACTION_CREDIT_COST} credits in balance per PDF. Each file is debited when processing starts; if extraction fails, credits are refunded automatically.`,
         'Credits required',
@@ -62,6 +66,7 @@ export default function BatchUpload({
     const selectedFiles = Array.from(e.target.files || []);
     
     if (selectedFiles.length + files.length > MAX_FILES) {
+      track('ve_batch_file_select_blocked', { reason: 'max_files' });
       showMessage(`You can only upload up to ${MAX_FILES} files at a time.`, 'Too many files');
       return;
     }
@@ -87,6 +92,7 @@ export default function BatchUpload({
 
     if (validFiles.length === 0) {
       if (errors.length > 0) {
+        track('ve_batch_file_select_skip', { error_lines: errors.length });
         showMessage(errors.join('\n'), 'Some files were skipped');
       }
       return;
@@ -95,6 +101,7 @@ export default function BatchUpload({
     const totalAfter = files.length + validFiles.length;
     const needed = totalAfter * AI_EXTRACTION_CREDIT_COST;
     if (credits < needed) {
+      track('ve_batch_file_select_blocked', { reason: 'queue_exceeds_credits', queue_after: totalAfter });
       showMessage(
         `Each PDF needs ${AI_EXTRACTION_CREDIT_COST} credits when processing succeeds. ${totalAfter} file(s) require ${needed} credits; you have ${credits}. Remove files from the queue or buy more credits.`,
         'Insufficient credits',
@@ -104,13 +111,16 @@ export default function BatchUpload({
     }
 
     if (errors.length > 0) {
+      track('ve_batch_file_select_partial', { accepted: validFiles.length, skipped_lines: errors.length });
       showMessage(errors.join('\n'), 'Some files were skipped');
     }
 
+    track('ve_batch_files_queued', { added: validFiles.length, queue_total: totalAfter });
     setFiles((prev) => [...prev, ...validFiles]);
   };
 
   const removeFile = (id: string) => {
+    track('ve_batch_file_remove');
     setFiles((prev) => prev.filter((f) => f.id !== id));
   };
 
@@ -118,6 +128,7 @@ export default function BatchUpload({
     if (files.length === 0) return;
 
     if (!canUseBatch || credits < files.length * AI_EXTRACTION_CREDIT_COST) {
+      track('ve_batch_upload_submit_blocked', { reason: 'credits', queue: files.length });
       showMessage(
         `You need ${files.length * AI_EXTRACTION_CREDIT_COST} credits in balance for ${files.length} file(s) (${AI_EXTRACTION_CREDIT_COST} per file). You have ${credits}. Failed extractions are refunded automatically.`,
         'Insufficient credits',
@@ -126,6 +137,7 @@ export default function BatchUpload({
       return;
     }
 
+    track('ve_batch_upload_submit_start', { file_count: files.length });
     setIsUploading(true);
     setUploadProgress(0);
 
@@ -175,6 +187,7 @@ export default function BatchUpload({
         setUploadProgress(Math.round((completed / files.length) * 100));
       } catch (error: any) {
         console.error(`Error uploading ${fileItem.file.name}:`, error);
+        track('ve_batch_file_upload_item_fail', { index: completed + 1 });
         setFiles((prev) =>
           prev.map((f) =>
             f.id === fileItem.id
@@ -186,6 +199,7 @@ export default function BatchUpload({
     }
 
     setIsUploading(false);
+    track('ve_batch_upload_submit_done', { file_count: files.length, ok_count: completed });
     
     setTimeout(() => {
       onComplete();
@@ -353,7 +367,10 @@ export default function BatchUpload({
 
         <div className="flex gap-4">
           <button
-            onClick={() => onComplete()}
+            onClick={() => {
+              track('ve_batch_upload_cancel_nav');
+              onComplete();
+            }}
             disabled={isUploading}
             className="px-8 py-4 bg-slate-100 text-slate-700 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
           >

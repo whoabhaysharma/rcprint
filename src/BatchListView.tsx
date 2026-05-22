@@ -7,6 +7,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { collection, query, where, onSnapshot, QueryDocumentSnapshot, doc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { ref, deleteObject } from 'firebase/storage';
 import { db, storage } from './firebase';
+import { track } from './analytics';
 import { FileText, Clock, CheckCircle2, XCircle, Edit3, Loader, Upload, RefreshCw, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import type { User as FirebaseUser } from 'firebase/auth';
@@ -126,6 +127,7 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch, on
   }, [user.uid]);
 
   const handleRetry = async (submissionId: string) => {
+    track('ve_batch_list_retry_click', { id_len: submissionId.length });
     setRetryingIds(prev => new Set(prev).add(submissionId));
     try {
       const submissionRef = doc(db, 'batchSubmissions', submissionId);
@@ -134,8 +136,10 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch, on
         errorMessage: null,
         updatedAt: serverTimestamp(),
       });
+      track('ve_batch_list_retry_ok');
     } catch (error) {
       console.error('Error retrying submission:', error);
+      track('ve_batch_list_retry_fail');
       showMessage('Failed to retry. Please try again.', 'Retry failed');
     } finally {
       setRetryingIds(prev => {
@@ -147,6 +151,7 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch, on
   };
 
   const confirmDelete = (submission: BatchSubmission & { docId: string }) => {
+    track('ve_batch_list_delete_confirm_open');
     setDeleteConfirmation({ submission });
   };
 
@@ -154,6 +159,7 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch, on
     if (!deleteConfirmation) return;
     
     const submission = deleteConfirmation.submission;
+    track('ve_batch_list_delete_commit', { status: submission.status });
     setDeleteConfirmation(null);
     setDeletingIds(prev => new Set(prev).add(submission.docId));
     
@@ -176,9 +182,10 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch, on
 
       // Delete from Firestore
       await deleteDoc(doc(db, 'batchSubmissions', submission.docId));
-      
+      track('ve_batch_list_delete_ok');
     } catch (error) {
       console.error('Error deleting submission:', error);
+      track('ve_batch_list_delete_fail');
       showMessage('Failed to delete. Please try again.', 'Delete failed');
       setDeletingIds(prev => {
         const next = new Set(prev);
@@ -220,6 +227,7 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch, on
           <div className="flex gap-3 justify-center">
             <button
               onClick={() => {
+                track('ve_batch_list_reload');
                 setLoading(true);
                 setLoadError(null);
                 // re-trigger useEffect by forcing a state change is unnecessary; user refresh is simplest.
@@ -230,7 +238,10 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch, on
               Reload
             </button>
             <button
-              onClick={() => onNewBatch()}
+              onClick={() => {
+                track('ve_batch_list_new_from_error');
+                onNewBatch();
+              }}
               className="px-8 py-4 bg-slate-100 text-slate-700 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-slate-200 transition-all"
             >
               New Batch
@@ -254,7 +265,10 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch, on
             </p>
           </div>
           <button
-            onClick={onNewBatch}
+            onClick={() => {
+              track('ve_batch_list_new_batch_click');
+              onNewBatch();
+            }}
             className="shrink-0 px-6 py-3 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-blue-700 transition-all shadow-lg flex items-center gap-2 self-start sm:self-auto"
           >
             <Upload size={16} />
@@ -264,7 +278,10 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch, on
 
         <div className="grid grid-cols-5 gap-4 mb-8">
           <button
-            onClick={() => setFilter('all')}
+            onClick={() => {
+              track('ve_batch_list_filter', { filter: 'all' });
+              setFilter('all');
+            }}
             className={`p-4 rounded-2xl border-2 transition-all ${
               filter === 'all'
                 ? 'border-blue-500 bg-blue-50'
@@ -277,7 +294,10 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch, on
             </div>
           </button>
           <button
-            onClick={() => setFilter('pending')}
+            onClick={() => {
+              track('ve_batch_list_filter', { filter: 'pending' });
+              setFilter('pending');
+            }}
             className={`p-4 rounded-2xl border-2 transition-all ${
               filter === 'pending'
                 ? 'border-slate-500 bg-slate-50'
@@ -290,7 +310,10 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch, on
             </div>
           </button>
           <button
-            onClick={() => setFilter('processing')}
+            onClick={() => {
+              track('ve_batch_list_filter', { filter: 'processing' });
+              setFilter('processing');
+            }}
             className={`p-4 rounded-2xl border-2 transition-all ${
               filter === 'processing'
                 ? 'border-blue-500 bg-blue-50'
@@ -303,7 +326,10 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch, on
             </div>
           </button>
           <button
-            onClick={() => setFilter('processed')}
+            onClick={() => {
+              track('ve_batch_list_filter', { filter: 'processed' });
+              setFilter('processed');
+            }}
             className={`p-4 rounded-2xl border-2 transition-all ${
               filter === 'processed'
                 ? 'border-green-500 bg-green-50'
@@ -316,7 +342,10 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch, on
             </div>
           </button>
           <button
-            onClick={() => setFilter('error')}
+            onClick={() => {
+              track('ve_batch_list_filter', { filter: 'error' });
+              setFilter('error');
+            }}
             className={`p-4 rounded-2xl border-2 transition-all ${
               filter === 'error'
                 ? 'border-red-500 bg-red-50'
@@ -343,7 +372,10 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch, on
             </p>
             {filter === 'all' && (
               <button
-                onClick={onNewBatch}
+                onClick={() => {
+                  track('ve_batch_list_upload_empty_cta');
+                  onNewBatch();
+                }}
                 className="px-8 py-4 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-blue-700 transition-all shadow-lg"
               >
                 Upload Batch
@@ -433,7 +465,10 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch, on
                       <div className="flex items-center gap-3">
                         {submission.status === 'processed' && (
                           <button
-                            onClick={() => onSelectSubmission(submission.docId)}
+                            onClick={() => {
+                              track('ve_batch_list_open_editor', { status: submission.status });
+                              onSelectSubmission(submission.docId);
+                            }}
                             className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl font-black uppercase tracking-widest text-xs hover:bg-blue-700 transition-all"
                           >
                             <Edit3 size={14} />
@@ -476,7 +511,10 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch, on
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-[100] bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-6"
-            onClick={() => setDeleteConfirmation(null)}
+            onClick={() => {
+              track('ve_batch_list_delete_cancel');
+              setDeleteConfirmation(null);
+            }}
           >
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
@@ -502,7 +540,10 @@ export default function BatchListView({ user, onSelectSubmission, onNewBatch, on
               </p>
               <div className="flex gap-3">
                 <button
-                  onClick={() => setDeleteConfirmation(null)}
+                  onClick={() => {
+                    track('ve_batch_list_delete_cancel');
+                    setDeleteConfirmation(null);
+                  }}
                   className="flex-1 px-6 py-4 bg-slate-100 text-slate-700 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-slate-200 transition-all"
                 >
                   Cancel
