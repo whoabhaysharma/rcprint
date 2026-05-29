@@ -140,6 +140,21 @@ const createGenaiClient = () => {
   });
 };
 
+const getExtractionModel = async () => {
+  try {
+    const doc = await getFirestore().collection("settings").doc("global").get();
+    if (doc.exists) {
+      const data = doc.data();
+      if (data && data.extractionModel && typeof data.extractionModel === "string" && data.extractionModel.trim() !== "") {
+        return data.extractionModel.trim();
+      }
+    }
+  } catch (e) {
+    logger.error("Failed to read configured model from Firestore, using default", { message: e?.message });
+  }
+  return "gemini-3.1-flash-lite";
+};
+
 const requireAuth = async (req) => {
   const header = req.get("authorization") || req.get("Authorization") || "";
   const match = String(header).match(/^Bearer\s+(.+)$/i);
@@ -505,8 +520,9 @@ exports.extractRc = functions.https.onRequest(async (req, res) => {
       ${customPrompt || "None"}
     `;
 
+    const activeModel = await getExtractionModel();
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: activeModel,
       contents: {
         parts: [
           { inlineData: { data: payloadData, mimeType: payloadMimeType } },
@@ -1152,6 +1168,7 @@ exports.getAdminDashboard = functions.https.onRequest(async (req, res) => {
       db.collection("batchSubmissions").where("status", "==", "pending").count().get(),
     ]);
 
+    const activeModel = await getExtractionModel();
     res.json({
       ok: true,
       totalUsers,
@@ -1168,6 +1185,7 @@ exports.getAdminDashboard = functions.https.onRequest(async (req, res) => {
       },
       usersByCredits: usersByCredits.slice(0, 50),
       recentOrders,
+      extractionModel: activeModel,
     });
   } catch (error) {
     const code = Number(error?.code);
@@ -1421,17 +1439,18 @@ async function runBatchSubmissionWorker(snap, submissionId) {
           - Numbers: do not include units (KG/MM/CC). Extract full chassis/engine strings.
         `;
 
+        const activeModel = await getExtractionModel();
         logLine(
           "info",
           submissionId,
           "gemini:start",
-          `model=gemini-3-flash-preview timeout=${GEMINI_TIMEOUT_MS}ms`,
-          { model: "gemini-3-flash-preview", geminiTimeoutMs: GEMINI_TIMEOUT_MS }
+          `model=${activeModel} timeout=${GEMINI_TIMEOUT_MS}ms`,
+          { model: activeModel, geminiTimeoutMs: GEMINI_TIMEOUT_MS }
         );
         const t1 = Date.now();
         const extractionResponse = await withTimeout("gemini_generateContent", GEMINI_TIMEOUT_MS, async () => {
           return await ai.models.generateContent({
-            model: "gemini-3-flash-preview",
+            model: activeModel,
             contents: {
               parts: [
                 { inlineData: { data: base64Data, mimeType: 'application/pdf' } },
@@ -1665,6 +1684,40 @@ exports.cleanupOldBatchPdfs = functions.pubsub
     return null;
 
   });
+
+/** Admin settings: update global settings. Super admin only. */
+exports.adminUpdateSettings = functions.https.onRequest(async (req, res) => {
+  if (allowCors(req, res)) return;
+  if (req.method !== "POST") {
+    res.status(405).send("Method Not Allowed");
+    return;
+  }
+  try {
+    const auth = await requireAuth(req);
+    if (!(await isSuperAdminUser(auth.uid))) {
+      res.status(403).json({ ok: false, error: "Super admin privileges required" });
+      return;
+    }
+
+    const { extractionModel } = req.body || {};
+    if (typeof extractionModel !== "string" || !extractionModel.trim()) {
+      res.status(400).json({ ok: false, error: "Invalid extractionModel parameter" });
+      return;
+    }
+
+    const db = getFirestore();
+    await db.collection("settings").doc("global").set({
+      extractionModel: extractionModel.trim(),
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: auth.email || auth.uid,
+    }, { merge: true });
+
+    res.json({ ok: true, extractionModel: extractionModel.trim() });
+  } catch (error) {
+    logger.error("[admin] update settings error", { message: error?.message });
+    res.status(500).json({ ok: false, error: error?.message || "Failed to update settings" });
+  }
+});
 
 /** Creates a Firestore user document when a new user signs up via Firebase Auth. */
 exports.createUserDoc = functions.auth.user().onCreate(async (user) => {

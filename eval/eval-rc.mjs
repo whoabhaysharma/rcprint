@@ -13,8 +13,8 @@ function parseArgs(argv) {
     pdfDir: path.resolve(__dirname, "pdfs"),
     expectedDir: path.resolve(__dirname, "expected"),
     outFile: path.resolve(__dirname, "results.json"),
-    model: "gemini-3-flash-preview",
-    verifyModel: "gemini-3-flash-preview",
+    model: "gemini-3.1-flash-lite",
+    verifyModel: "gemini-3.1-flash-lite",
     verify: true,
     promptSource: path.resolve(__dirname, "..", "functions", "index.js"),
   };

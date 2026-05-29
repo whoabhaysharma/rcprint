@@ -31,6 +31,7 @@ type DashboardData = {
     email: string | null;
     createdAtMs: number | null;
   }>;
+  extractionModel?: string;
 };
 
 export function AdminDashboard({ user, onBack }: { user: User; onBack: () => void }) {
@@ -40,7 +41,15 @@ export function AdminDashboard({ user, onBack }: { user: User; onBack: () => voi
   const [grantEmail, setGrantEmail] = useState('');
   const [grantCredits, setGrantCredits] = useState('100');
   const [grantSubmitting, setGrantSubmitting] = useState(false);
+  const [modelInput, setModelInput] = useState('');
+  const [settingsSubmitting, setSettingsSubmitting] = useState(false);
   const showMessage = useMessageDialog();
+
+  useEffect(() => {
+    if (data?.extractionModel) {
+      setModelInput(data.extractionModel);
+    }
+  }, [data]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -183,38 +192,38 @@ export function AdminDashboard({ user, onBack }: { user: User; onBack: () => voi
           </div>
         </div>
 
-        {/* Grant Credits */}
-        <div className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-sm">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
-              <ShieldCheck size={20} />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+          {/* Grant Credits */}
+          <div className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-sm">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
+                <ShieldCheck size={20} />
+              </div>
+              <h3 className="text-sm font-black tracking-tight text-slate-900">Grant Credits</h3>
             </div>
-            <h3 className="text-sm font-black tracking-tight text-slate-900">Grant Credits</h3>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-[11px] font-black uppercase tracking-widest text-slate-500 mb-2">
-                Recipient email
-              </label>
-              <input
-                value={grantEmail}
-                onChange={(e) => setGrantEmail(e.target.value)}
-                placeholder="user@example.com"
-                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:ring-2 focus:ring-blue-200"
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] font-black uppercase tracking-widest text-slate-500 mb-2">
-                Credits to add
-              </label>
-              <input
-                value={grantCredits}
-                onChange={(e) => setGrantCredits(e.target.value)}
-                inputMode="numeric"
-                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:ring-2 focus:ring-blue-200"
-              />
-            </div>
-            <div className="flex items-end">
+            <div className="space-y-4">
+              <div>
+                <label className="block text-[11px] font-black uppercase tracking-widest text-slate-500 mb-2">
+                  Recipient email
+                </label>
+                <input
+                  value={grantEmail}
+                  onChange={(e) => setGrantEmail(e.target.value)}
+                  placeholder="user@example.com"
+                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:ring-2 focus:ring-blue-200"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-black uppercase tracking-widest text-slate-500 mb-2">
+                  Credits to add
+                </label>
+                <input
+                  value={grantCredits}
+                  onChange={(e) => setGrantCredits(e.target.value)}
+                  inputMode="numeric"
+                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:ring-2 focus:ring-blue-200"
+                />
+              </div>
               <button
                 type="button"
                 disabled={grantSubmitting}
@@ -259,7 +268,69 @@ export function AdminDashboard({ user, onBack }: { user: User; onBack: () => voi
                 }}
                 className="w-full rounded-2xl bg-slate-900 py-3 text-xs font-black uppercase tracking-widest text-white hover:bg-black disabled:opacity-60"
               >
-                {grantSubmitting ? 'Granting…' : 'Grant'}
+                {grantSubmitting ? 'Granting…' : 'Grant Credits'}
+              </button>
+            </div>
+          </div>
+
+          {/* Global AI Config */}
+          <div className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-sm">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                <LayoutGrid size={20} />
+              </div>
+              <h3 className="text-sm font-black tracking-tight text-slate-900">AI Model Configuration</h3>
+            </div>
+            <div className="space-y-4 flex flex-col justify-between h-[calc(100%-3.5rem)]">
+              <div>
+                <label className="block text-[11px] font-black uppercase tracking-widest text-slate-500 mb-2">
+                  Active Gemini Model
+                </label>
+                <input
+                  value={modelInput}
+                  onChange={(e) => setModelInput(e.target.value)}
+                  placeholder="gemini-3.1-flash-lite"
+                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:ring-2 focus:ring-blue-200"
+                />
+                <p className="text-[10px] text-slate-400 font-medium mt-1.5 leading-relaxed">
+                  Default: <span className="font-bold">gemini-3.1-flash-lite</span>. Enter any valid Gemini model name to override the default model immediately.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={settingsSubmitting}
+                onClick={async () => {
+                  const modelName = modelInput.trim();
+                  if (!modelName) {
+                    showMessage('Please enter a valid model name.', 'Invalid model');
+                    return;
+                  }
+                  setSettingsSubmitting(true);
+                  try {
+                    const token = await user.getIdToken();
+                    const res = await fetch('/api/admin/updateSettings', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${token}`
+                      },
+                      body: JSON.stringify({ extractionModel: modelName }),
+                    });
+                    if (!res.ok) throw new Error(await res.text());
+                    showMessage(
+                      `Successfully updated active extraction model to: ${modelName}`,
+                      'Settings updated'
+                    );
+                    void load();
+                  } catch (e) {
+                    showMessage((e as Error)?.message || 'Failed to update model settings', 'Admin error');
+                  } finally {
+                    setSettingsSubmitting(false);
+                  }
+                }}
+                className="w-full rounded-2xl bg-slate-900 py-3 text-xs font-black uppercase tracking-widest text-white hover:bg-black disabled:opacity-60 mt-auto"
+              >
+                {settingsSubmitting ? 'Updating settings…' : 'Save Model Configuration'}
               </button>
             </div>
           </div>

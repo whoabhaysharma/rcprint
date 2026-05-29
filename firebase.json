@@ -34,6 +34,11 @@
         "region": "us-central1"
       },
       {
+        "source": "/api/admin/updateSettings",
+        "function": "adminUpdateSettings",
+        "region": "us-central1"
+      },
+      {
         "source": "/api/razorpay/createOrder",
         "function": "createRazorpayOrder",
         "region": "us-central1"

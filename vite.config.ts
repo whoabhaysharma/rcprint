@@ -121,7 +121,7 @@ export default defineConfig(({mode}) => {
                 const timeoutMs = 25000;
                 const response = await Promise.race([
                   ai.models.generateContent({
-                    model: "gemini-3-flash-preview",
+                    model: "gemini-3.1-flash-lite",
                     contents: [
                       { inlineData: { data: payloadData, mimeType: payloadMimeType } },
                       { text: prompt }
@@ -328,6 +328,7 @@ export default defineConfig(({mode}) => {
           proxyToFunction('/api/admin/dashboard', 'getAdminDashboard', 'GET');
           proxyToFunction('/api/admin/grantCredits', 'adminGrantCredits', 'GET');
           proxyToFunction('/api/admin/me', 'getAdminMe', 'GET');
+          proxyToFunction('/api/admin/updateSettings', 'adminUpdateSettings', 'POST');
           proxyToFunction('/api/razorpay/createPublicOrder', 'createPublicRazorpayOrder', 'POST');
           proxyToFunction('/api/razorpay/verifyPublicPayment', 'verifyPublicRazorpayPayment', 'POST');
           proxyToFunction('/api/credits/publicTopup', 'publicCreditTopup', 'POST');

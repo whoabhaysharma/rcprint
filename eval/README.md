@@ -33,7 +33,7 @@ node eval/eval-rc.mjs
 ```
 
 By default it uses:
-- extraction model: `gemini-3-flash-preview`
+- extraction model: `gemini-3.1-flash-lite`
 - verify/fix pass: enabled (same model)
 
 Optional flags:
@@ -43,8 +43,8 @@ node eval/eval-rc.mjs \
   --pdfDir eval/pdfs \
   --expectedDir eval/expected \
   --out eval/results.json \
-  --model gemini-3-flash-preview \
-  --verifyModel gemini-3-flash-preview \
+  --model gemini-3.1-flash-lite \
+  --verifyModel gemini-3.1-flash-lite \
   --no-verify \
   --promptSource functions/index.js
 ```
