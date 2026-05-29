@@ -11,6 +11,12 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Global Settings — Cloud Functions / Admin SDK only for write; authenticated users can read.
+    match /settings/{docId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
     // Credit ledger — server-written; clients may read their own rows only.
     match /users/{userId}/creditLedger/{entryId} {
       allow read: if request.auth != null && request.auth.uid == userId;
