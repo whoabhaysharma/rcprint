@@ -8,7 +8,7 @@ import { Coins } from 'lucide-react';
 import { track } from './analytics';
 import { resolveFunctionsHttpUrl } from './resolveFunctionsHttpUrl';
 
-const MIN_STEP = 50;
+const MIN_STEP = 10;
 
 async function readApiError(res: Response): Promise<string> {
   const t = await res.text();

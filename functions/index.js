@@ -165,10 +165,6 @@ const requireAuth = async (req) => {
 // AI extraction (each batch file, etc.) costs AI_PROCESSING_CREDIT_COST
 // credits on success only (see deductAiCreditsOrThrow). Manual PDF workflows do not
 // hit these endpoints and are free on the client.
-const PLANS = {
-  100: { amountInr: 100, credits: 100 },
-  299: { amountInr: 299, credits: 350 },
-};
 
 const getUserRef = (uid) => getFirestore().collection("users").doc(uid);
 
@@ -182,6 +178,7 @@ const getConfiguredSuperAdminEmail = () => {
 };
 
 const ADMIN_GRANT_MAX_PER_CALL = asInt(process.env.ADMIN_GRANT_MAX_PER_CALL, 50_000);
+const ADMIN_DASHBOARD_USERS_LIMIT = asInt(process.env.ADMIN_DASHBOARD_USERS_LIMIT, 500);
 
 /** Public POST /add-credits UI: max credits per request (multiple of 50). */
 const PUBLIC_CREDIT_TOPUP_MAX = asInt(process.env.PUBLIC_CREDIT_TOPUP_MAX, 50_000);
@@ -574,26 +571,26 @@ exports.createRazorpayOrder = functions.https.onRequest(async (req, res) => {
     const keyId = getRazorpayKeyId();
     const keySecret = getRazorpayKeySecret();
 
-    const { planInr, currency = "INR", notes } = req.body || {};
-    const planKey = Number(planInr);
-    const plan = PLANS[planKey];
-    if (!plan) {
-      res.status(400).json({ error: "Invalid planInr. Allowed: 100, 299" });
+    const { amountInr, currency = "INR", notes } = req.body || {};
+    const parsedAmount = Number(amountInr);
+    if (!Number.isFinite(parsedAmount) || parsedAmount < 50 || parsedAmount > 2000 || parsedAmount % 10 !== 0) {
+      res.status(400).json({ error: "Amount must be between ₹50 and ₹2000 in multiples of 10" });
       return;
     }
 
+    const creditsToAdd = parsedAmount;
     const razorpay = new Razorpay({ key_id: keyId, key_secret: keySecret });
     // Razorpay: receipt must be unique and max 40 chars (Firebase UID + timestamp exceeds that).
     const receipt = `c_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
     const order = await razorpay.orders.create({
-      amount: plan.amountInr * 100,
+      amount: parsedAmount * 100,
       currency,
       receipt,
       notes: {
         ...(notes && typeof notes === "object" ? notes : {}),
         uid: auth.uid,
-        planInr: String(plan.amountInr),
-        credits: String(plan.credits),
+        planInr: String(parsedAmount),
+        credits: String(creditsToAdd),
       },
     });
 
@@ -602,8 +599,8 @@ exports.createRazorpayOrder = functions.https.onRequest(async (req, res) => {
       .doc(order.id)
       .set({
         uid: auth.uid,
-        planInr: plan.amountInr,
-        credits: plan.credits,
+        planInr: parsedAmount,
+        credits: creditsToAdd,
         status: "created",
         receipt: order.receipt || receipt,
         createdAt: FieldValue.serverTimestamp(),
@@ -680,7 +677,7 @@ exports.verifyRazorpayPayment = functions.https.onRequest(async (req, res) => {
       const userSnap = await tx.get(userRef);
       const currentCredits = Number(userSnap.data()?.credits || 0);
       const nextCredits = currentCredits + creditsToAdd;
-      tx.set(userRef, { credits: nextCredits, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+      tx.set(userRef, { credits: nextCredits, email: auth.email || '', updatedAt: FieldValue.serverTimestamp() }, { merge: true });
 
       const ledgerRef = userRef.collection("creditLedger").doc();
       tx.set(ledgerRef, {
@@ -886,7 +883,7 @@ exports.verifyPublicRazorpayPayment = functions.https.onRequest(async (req, res)
       const userSnap = await tx.get(userRef);
       const currentCredits = Number(userSnap.data()?.credits || 0);
       const nextCredits = currentCredits + creditsToAdd;
-      tx.set(userRef, { credits: nextCredits, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+      tx.set(userRef, { credits: nextCredits, email: orderData.email || '', updatedAt: FieldValue.serverTimestamp() }, { merge: true });
 
       const ledgerRef = userRef.collection("creditLedger").doc();
       tx.set(ledgerRef, {
@@ -1078,6 +1075,105 @@ exports.getAdminMe = functions.https.onRequest(async (req, res) => {
     const code = Number(error?.code);
     const status = code === 401 ? 401 : 500;
     res.status(status).json({ ok: false, error: error?.message || "Failed to load admin status" });
+  }
+});
+
+/** Admin dashboard: aggregated stats. Super admin only. */
+exports.getAdminDashboard = functions.https.onRequest(async (req, res) => {
+  if (allowCors(req, res)) return;
+  if (req.method !== "GET") {
+    res.status(405).send("Method Not Allowed");
+    return;
+  }
+  try {
+    const auth = await requireAuth(req);
+    if (!(await isSuperAdminUser(auth.uid))) {
+      res.status(403).json({ ok: false, error: "Super admin privileges required" });
+      return;
+    }
+
+    const db = getFirestore();
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const [userCountSnap, usersSnap, registrationsCountSnap, batchCountSnap, creditedOrdersSnap] =
+      await Promise.all([
+        db.collection("users").count().get(),
+        db.collection("users").orderBy("credits", "desc").limit(ADMIN_DASHBOARD_USERS_LIMIT).get(),
+        db.collection("registrations").count().get(),
+        db.collection("batchSubmissions").count().get(),
+        db.collection("razorpayOrders").where("status", "==", "credited").get(),
+      ]);
+
+    const totalUsers = userCountSnap.data().count;
+    let totalCredits = 0;
+    const usersByCredits = [];
+    for (const doc of usersSnap.docs) {
+      const d = doc.data();
+      const c = Number(d.credits || 0);
+      totalCredits += c;
+      usersByCredits.push({
+        uid: doc.id,
+        email: d.email || null,
+        credits: c,
+        superAdmin: d.superAdmin === true,
+        createdAtMs: d.createdAt?.toMillis ? d.createdAt.toMillis() : null,
+      });
+    }
+    usersByCredits.sort((a, b) => b.credits - a.credits);
+
+    const totalRegistrations = registrationsCountSnap.data().count;
+    const totalBatchSubmissions = batchCountSnap.data().count;
+
+    let totalRevenue = 0;
+    const ordersWithTime = [];
+    for (const doc of creditedOrdersSnap.docs) {
+      const d = doc.data();
+      totalRevenue += Number(d.planInr || 0);
+      const createdAtMs = d.createdAt?.toMillis ? d.createdAt.toMillis() : null;
+      ordersWithTime.push({
+        id: doc.id,
+        amount: Number(d.planInr || 0),
+        credits: Number(d.credits || 0),
+        email: d.email || null,
+        createdAtMs,
+        _sort: createdAtMs || 0,
+      });
+    }
+    ordersWithTime.sort((a, b) => b._sort - a._sort);
+    const recentOrders = ordersWithTime.slice(0, 20);
+
+    const [regTodaySnap, regMonthSnap, batchProcSnap, batchErrSnap, batchPendSnap] = await Promise.all([
+      db.collection("registrations").where("createdAt", ">=", todayStart).count().get(),
+      db.collection("registrations").where("createdAt", ">=", thisMonthStart).count().get(),
+      db.collection("batchSubmissions").where("status", "==", "processed").count().get(),
+      db.collection("batchSubmissions").where("status", "==", "error").count().get(),
+      db.collection("batchSubmissions").where("status", "==", "pending").count().get(),
+    ]);
+
+    res.json({
+      ok: true,
+      totalUsers,
+      totalCredits,
+      totalRegistrations,
+      totalBatchSubmissions,
+      totalRevenue,
+      registrationsToday: regTodaySnap.data().count,
+      registrationsThisMonth: regMonthSnap.data().count,
+      batchStats: {
+        processed: batchProcSnap.data().count,
+        error: batchErrSnap.data().count,
+        pending: batchPendSnap.data().count,
+      },
+      usersByCredits: usersByCredits.slice(0, 50),
+      recentOrders,
+    });
+  } catch (error) {
+    const code = Number(error?.code);
+    const status = code === 401 ? 401 : code === 403 ? 403 : 500;
+    logger.error("[admin] dashboard error", { message: error?.message });
+    res.status(status).json({ ok: false, error: error?.message || "Failed to load dashboard" });
   }
 });
 
@@ -1567,4 +1663,16 @@ exports.cleanupOldBatchPdfs = functions.pubsub
 
     logger.info("[batch][cleanup] done", { deleted, skipped, retentionMs: PDF_RETENTION_MS });
     return null;
+
   });
+
+/** Creates a Firestore user document when a new user signs up via Firebase Auth. */
+exports.createUserDoc = functions.auth.user().onCreate(async (user) => {
+  await getUserRef(user.uid).set({
+    credits: 0,
+    email: user.email || '',
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  logger.info("[auth] user doc created", { uid: user.uid, email: user.email || '' });
+});

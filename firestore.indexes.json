@@ -1,0 +1,36 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "creditLedger",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collection": "users",
+      "fields": [
+        { "fieldPath": "credits", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collection": "registrations",
+      "fields": [
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collection": "batchSubmissions",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collection": "razorpayOrders",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    }
+  ]
+}

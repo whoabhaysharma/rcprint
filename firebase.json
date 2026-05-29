@@ -19,6 +19,11 @@
         "region": "us-central1"
       },
       {
+        "source": "/api/admin/dashboard",
+        "function": "getAdminDashboard",
+        "region": "us-central1"
+      },
+      {
         "source": "/api/admin/grantCredits",
         "function": "adminGrantCredits",
         "region": "us-central1"

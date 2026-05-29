@@ -20,15 +20,10 @@ import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import BatchUpload from './BatchUpload';
 import BatchListView from './BatchListView';
 import { CreditHistoryDialog } from './components/CreditHistoryDialog';
+import { AdminDashboard } from './components/AdminDashboard';
 import { useMessageDialog } from './components/message-dialog';
 import { AI_EXTRACTION_CREDIT_COST } from './constants/credits';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/src/components/ui/dialog';
 import { track, trackScreen, setAnalyticsUserId, setAnalyticsUserProps } from './analytics';
 
 
@@ -122,16 +117,10 @@ const initialData: FormData = {
   manufacturingDt: '10/2024',
 };
 
-type AppView = 'mode-selection' | 'form' | 'preview' | 'success' | 'batch-upload' | 'batch-list';
+type AppView = 'mode-selection' | 'form' | 'preview' | 'success' | 'batch-upload' | 'batch-list' | 'admin-dashboard';
 
 type RcDataSource = 'manual' | 'ai';
 
-/** Available credit packs. Keep in sync with `PLANS` in `functions/index.js`. */
-type CreditPlanInr = 100 | 299;
-const CREDIT_PLANS: ReadonlyArray<{ inr: CreditPlanInr; credits: number; label: string }> = [
-  { inr: 100, credits: 100, label: 'Starter' },
-  { inr: 299, credits: 350, label: 'Best value' },
-];
 
 const AUTH_NETWORK_USER_MSG =
   'Could not reach Google sign-in (network). Check your internet connection, try another network or device, and pause VPN or extensions that block Google. For local development, only set VITE_USE_FIREBASE_EMULATORS=true when Firebase emulators are running.';
@@ -242,12 +231,8 @@ export default function App() {
   const [creditsLoading, setCreditsLoading] = useState(false);
   const [showPlans, setShowPlans] = useState(false);
   const [creditHistoryOpen, setCreditHistoryOpen] = useState(false);
-  const [adminOpen, setAdminOpen] = useState(false);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
-  const [adminLoading, setAdminLoading] = useState(false);
-  const [grantEmail, setGrantEmail] = useState('');
-  const [grantCredits, setGrantCredits] = useState('100');
-  const [grantSubmitting, setGrantSubmitting] = useState(false);
+  const [verifyingPayment, setVerifyingPayment] = useState(false);
   const [signature, setSignature] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const [isLayoutEditing, setIsLayoutEditing] = useState(false);
@@ -265,7 +250,6 @@ export default function App() {
       setAuthLoading(false);
       if (!u) {
         setCreditHistoryOpen(false);
-        setAdminOpen(false);
         setShowPlans(false);
       }
     });
@@ -304,7 +288,6 @@ export default function App() {
       setIsSuperAdmin(false);
       return;
     }
-    setAdminLoading(true);
     try {
       const token = await u.getIdToken();
       const res = await fetch('/api/admin/me', {
@@ -317,8 +300,6 @@ export default function App() {
     } catch (e) {
       console.warn('Failed to refresh admin status', e);
       setIsSuperAdmin(false);
-    } finally {
-      setAdminLoading(false);
     }
   };
 
@@ -353,7 +334,9 @@ export default function App() {
       trackScreen('ve_sign_in');
       return;
     }
-    if (view === 'form' || view === 'preview') {
+    if (view === 'admin-dashboard') {
+      trackScreen('ve_admin_dashboard');
+    } else if (view === 'form' || view === 'preview') {
       trackScreen('ve_rc_workspace', {
         workspace_phase: view,
         rc_data_source: rcDataSource,
@@ -622,11 +605,25 @@ export default function App() {
     }
   };
 
-  const startCreditsPurchase = async (planInr: CreditPlanInr) => {
+  const [rechargeAmount, setRechargeAmount] = useState('100');
+
+  const rechargeAmountError = React.useMemo(() => {
+    const amt = Number(rechargeAmount);
+    if (!rechargeAmount.trim()) return null;
+    if (!Number.isFinite(amt)) return 'Enter a valid number';
+    if (amt < 50) return 'Minimum ₹50';
+    if (amt > 2000) return 'Maximum ₹2000';
+    if (amt % 10 !== 0) return 'Must be a multiple of ₹10';
+    return null;
+  }, [rechargeAmount]);
+
+  const startCreditsPurchase = async () => {
     if (isPaying || isGenerating) return;
     if (!user) return;
+    const amt = Number(rechargeAmount);
+    if (!Number.isFinite(amt) || amt < 50 || amt > 2000 || amt % 10 !== 0) return;
 
-    track('ve_credit_checkout_start', { plan_inr: planInr, view });
+    track('ve_credit_checkout_start', { amount: amt, view });
     setIsPaying(true);
     try {
       let token: string;
@@ -641,7 +638,7 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
-          planInr,
+          amountInr: amt,
           notes: {
             regnNo: formData.regnNo || '',
             userEmail: user?.email || '',
@@ -660,7 +657,7 @@ export default function App() {
           amount: order.amount,
           currency: order.currency,
           name: 'Vehicle Enrollment',
-          description: `Credits pack ₹${planInr}`,
+          description: `₹${amt} — ${amt} credits`,
           order_id: order.id,
           prefill: {
             name: user?.displayName || '',
@@ -669,11 +666,13 @@ export default function App() {
           notes: order.notes || undefined,
           theme: { color: '#2563eb' },
           handler: async (response: any) => {
+            setVerifyingPayment(true);
             try {
               let verifyToken: string;
               try {
                 verifyToken = await user.getIdToken(true);
               } catch (e) {
+                setVerifyingPayment(false);
                 reject(new Error(userFacingAuthOrNetworkError(e)));
                 return;
               }
@@ -686,13 +685,15 @@ export default function App() {
               const data = await verifyRes.json();
               if (!data?.ok) throw new Error(data?.error || 'Payment verification failed');
               track('ve_credit_purchase_success', {
-                plan_inr: planInr,
+                amount: amt,
                 credits_after: Number(data?.credits || 0) || 0,
               });
               setCredits(Number(data?.credits || 0) || 0);
               void refreshCredits(user);
+              setVerifyingPayment(false);
               resolve();
             } catch (e) {
+              setVerifyingPayment(false);
               reject(e);
             }
           },
@@ -757,7 +758,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#FDFDFD] text-slate-900 font-sans flex flex-col">
+    <>
       <AnimatePresence>
         {showPlans && (
           <motion.div
@@ -795,40 +796,51 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {CREDIT_PLANS.map(({ inr, credits: planCredits, label }) => {
-                  const perDoc = (inr / planCredits) * AI_EXTRACTION_CREDIT_COST;
-                  return (
-                    <button
-                      key={inr}
-                      onClick={() => {
-                        track('ve_plan_pack_click', { plan_inr: inr, label: label.slice(0, 24) });
-                        void startCreditsPurchase(inr);
-                      }}
+              {verifyingPayment ? (
+                <div className="flex flex-col items-center justify-center py-12 space-y-4">
+                  <div className="w-12 h-12 rounded-full border-4 border-blue-200 border-t-blue-600 animate-spin" />
+                  <p className="text-lg font-black text-slate-900">Verifying payment…</p>
+                  <p className="text-sm font-bold text-amber-700 text-center max-w-xs">
+                    Do not close this page or navigate away while we confirm your payment.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-5">
+                  <div>
+                    <label className="block text-[11px] font-black uppercase tracking-widest text-slate-500 mb-2">
+                      Amount (₹)
+                    </label>
+                    <input
+                      value={rechargeAmount}
+                      onChange={(e) => setRechargeAmount(e.target.value)}
+                      inputMode="numeric"
+                      min={50}
+                      max={2000}
+                      step={10}
                       disabled={isPaying}
-                      className={`rounded-3xl border p-5 text-left transition-all disabled:opacity-50 ${
-                        label === 'Best value'
-                          ? 'border-blue-500 ring-4 ring-blue-100/40 bg-blue-50/40 hover:bg-blue-50'
-                          : 'border-slate-200 hover:border-blue-500 hover:ring-4 hover:ring-blue-100/30'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-400">{label}</div>
-                        {label === 'Best value' && (
-                          <span className="text-[9px] font-black uppercase tracking-widest bg-blue-600 text-white rounded-full px-2 py-1">
-                            Save 30%
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-2xl font-black text-slate-900 mt-2">₹{inr}</div>
-                      <div className="text-sm font-bold text-slate-700 mt-2">{planCredits} credits</div>
-                      <div className="text-[11px] font-bold text-slate-400 mt-1 tabular-nums">
-                        ≈ ₹{perDoc.toFixed(2)} / AI doc
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-lg font-black text-slate-900 outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 tabular-nums"
+                    />
+                    <p className="mt-2 text-xs font-bold text-slate-400">
+                      ₹1 = 1 credit · ₹50–₹2,000 · multiples of ₹10
+                    </p>
+                    {rechargeAmountError ? (
+                      <p className="mt-1 text-xs font-bold text-amber-700">{rechargeAmountError}</p>
+                    ) : null}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      track('ve_credit_checkout_click', { amount: Number(rechargeAmount) });
+                      void startCreditsPurchase();
+                    }}
+                    disabled={isPaying || !!rechargeAmountError || !rechargeAmount.trim()}
+                    className="w-full rounded-2xl bg-blue-600 py-4 text-sm font-black uppercase tracking-widest text-white hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-600/20"
+                  >
+                    {isPaying ? 'Processing…' : `Pay ₹${Number(rechargeAmount) || 0}`}
+                  </button>
+                </div>
+              )}
 
               <div className="mt-6 rounded-2xl bg-slate-50 border border-slate-100 p-4">
                 <div className="flex items-center justify-between text-sm font-bold text-slate-600">
@@ -843,104 +855,7 @@ export default function App() {
 
       <CreditHistoryDialog open={creditHistoryOpen} onOpenChange={setCreditHistoryOpen} user={user} />
 
-      <Dialog open={adminOpen} onOpenChange={setAdminOpen}>
-        <DialogContent className="max-w-lg gap-0 overflow-hidden p-0 sm:rounded-[2rem]">
-          <DialogHeader className="shrink-0 border-b border-slate-100 p-6 pb-4">
-            <DialogTitle className="text-xl font-black tracking-tight text-slate-900">Admin — Grant credits</DialogTitle>
-          </DialogHeader>
-          <div className="p-6 space-y-4">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-bold text-slate-700">
-              This panel is visible only to super admins.
-            </div>
-
-            <label className="block">
-              <span className="block text-[11px] font-black uppercase tracking-widest text-slate-500 mb-2">
-                Recipient email
-              </span>
-              <input
-                value={grantEmail}
-                onChange={(e) => setGrantEmail(e.target.value)}
-                placeholder="user@example.com"
-                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:ring-2 focus:ring-blue-200"
-              />
-            </label>
-
-            <label className="block">
-              <span className="block text-[11px] font-black uppercase tracking-widest text-slate-500 mb-2">
-                Credits to add
-              </span>
-              <input
-                value={grantCredits}
-                onChange={(e) => setGrantCredits(e.target.value)}
-                inputMode="numeric"
-                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:ring-2 focus:ring-blue-200"
-              />
-            </label>
-
-            <div className="flex gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setAdminOpen(false)}
-                className="flex-1 rounded-2xl border border-slate-200 bg-white py-3 text-xs font-black uppercase tracking-widest text-slate-700 hover:bg-slate-50"
-              >
-                Close
-              </button>
-              <button
-                type="button"
-                disabled={!user || grantSubmitting}
-                onClick={async () => {
-                  if (!user) return;
-                  const email = grantEmail.trim();
-                  const creditsToAdd = Number.parseInt(grantCredits.trim(), 10);
-                  if (!email) {
-                    showMessage('Enter a recipient email.', 'Missing email');
-                    return;
-                  }
-                  if (!Number.isFinite(creditsToAdd) || creditsToAdd < 1) {
-                    showMessage('Enter a valid credits amount (integer >= 1).', 'Invalid credits');
-                    return;
-                  }
-                  setGrantSubmitting(true);
-                  try {
-                    track('ve_admin_grant_attempt', { credits_to_add: creditsToAdd });
-                    const token = await user.getIdToken();
-                    const params = new URLSearchParams({ email, credits: String(creditsToAdd) });
-                    const res = await fetch(`/api/admin/grantCredits?${params}`, {
-                      method: 'GET',
-                      headers: { Authorization: `Bearer ${token}` },
-                    });
-                    if (!res.ok) throw new Error(await res.text());
-                    const data = (await res.json()) as { granted?: number; targetEmail?: string; credits?: number };
-                    track('ve_admin_grant_ok', {
-                      granted: Number(data.granted || 0),
-                      target_balance: Number(data.credits || 0),
-                    });
-                    showMessage(
-                      `Granted ${Number(data.granted || 0)} credits to ${data.targetEmail || email}.\nNew balance: ${Number(data.credits || 0)} credits.`,
-                      'Credits granted',
-                    );
-                    setGrantEmail('');
-                    void refreshCredits(user);
-                  } catch (e) {
-                    track('ve_admin_grant_fail');
-                    showMessage((e as Error)?.message || 'Failed to grant credits', 'Admin error');
-                  } finally {
-                    setGrantSubmitting(false);
-                  }
-                }}
-                className="flex-1 rounded-2xl bg-slate-900 py-3 text-xs font-black uppercase tracking-widest text-white hover:bg-black disabled:opacity-60"
-              >
-                {grantSubmitting ? 'Granting…' : 'Grant'}
-              </button>
-            </div>
-
-            {adminLoading ? (
-              <div className="text-xs font-bold text-slate-400">Checking admin status…</div>
-            ) : null}
-          </div>
-        </DialogContent>
-      </Dialog>
-
+      {view !== 'admin-dashboard' && (
       <header
         className="sticky top-0 z-[60] shrink-0 no-print border-b border-slate-200/90 bg-white/95 backdrop-blur-xl supports-[backdrop-filter]:bg-white/80"
         role="banner"
@@ -998,10 +913,10 @@ export default function App() {
                 type="button"
                 onClick={() => {
                   track('ve_admin_panel_open');
-                  setAdminOpen(true);
+                  setView('admin-dashboard');
                 }}
                 className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl border border-slate-200 bg-white text-[10px] sm:text-[11px] font-black uppercase tracking-widest text-slate-600 hover:bg-slate-50 transition-colors active:scale-[0.98]"
-                title="Admin panel"
+                title="Admin dashboard"
               >
                 <ShieldCheck size={14} className="shrink-0" />
                 <span className="max-[380px]:sr-only">Admin</span>
@@ -1039,10 +954,13 @@ export default function App() {
           </div>
         </div>
       </header>
+      )}
 
       <div className="w-full relative flex-1 min-h-0 flex flex-col">
         <AnimatePresence mode="wait">
-          {view === 'mode-selection' ? (
+            {view === 'admin-dashboard' ? (
+              <AdminDashboard key="admin" user={user!} onBack={() => setView('mode-selection')} />
+            ) : view === 'mode-selection' ? (
             <motion.div key="selection" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="max-w-5xl mx-auto space-y-12 py-12 sm:py-16 px-6">
               <div className="text-center space-y-4">
                 <h1 className="text-5xl font-black tracking-tight text-slate-900">Vehicle Enrollment</h1>
@@ -1275,7 +1193,7 @@ export default function App() {
           ) : null}
         </AnimatePresence>
       </div>
-    </div>
+    </>
   );
 }
 
