@@ -117,6 +117,38 @@ const initialData: FormData = {
   manufacturingDt: '10/2024',
 };
 
+export interface DlFormData {
+  dlNo: string;
+  name: string;
+  swdOf: string;
+  dob: string;
+  bloodGroup: string;
+  address: string;
+  doi: string;
+  validNt: string;
+  hasMcwg: boolean;
+  mcwgIssueDate: string;
+  hasLmv: boolean;
+  lmvIssueDate: string;
+  issuingAuthority: string;
+}
+
+const initialDlData: DlFormData = {
+  dlNo: 'HR03 20250005473',
+  name: 'GOPAL',
+  swdOf: 'SUNDER LAL',
+  dob: '20-07-1982',
+  bloodGroup: 'A+',
+  address: '# 327 SECTOR-19 VILLAGE, ABHEYPUR\nSECTOR 15 PANCHKULA PANCHKULA\nPANCHKULA PANCHKULA HARYANA',
+  doi: '18-09-2025',
+  validNt: '17-09-2035',
+  hasMcwg: true,
+  mcwgIssueDate: '18-09-2025',
+  hasLmv: true,
+  lmvIssueDate: '18-09-2025',
+  issuingAuthority: 'SDO(C) Panchkula',
+};
+
 type AppView = 'mode-selection' | 'form' | 'preview' | 'success' | 'batch-upload' | 'batch-list' | 'admin-dashboard';
 
 type RcDataSource = 'manual' | 'ai';
@@ -245,6 +277,10 @@ export default function App() {
   const [isBatchEditMode, setIsBatchEditMode] = useState(false);
   /** manual = user typed data (free PDF/print); ai = extraction or batch (billed on server). */
   const [rcDataSource, setRcDataSource] = useState<RcDataSource>('manual');
+  const [selectedService, setSelectedService] = useState<'rc' | 'dl'>('rc');
+  const [dlFormData, setDlFormData] = useState<DlFormData>(initialDlData);
+  const [dlSignature, setDlSignature] = useState<string | null>(null);
+  const [dlPhoto, setDlPhoto] = useState<string | null>(null);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -420,6 +456,34 @@ export default function App() {
       });
       const reader = new FileReader();
       reader.onloadend = () => setSignature(reader.result as string);
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleDlInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target;
+    setDlFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleDlCheckboxChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, checked } = e.target;
+    setDlFormData(prev => ({ ...prev, [name]: checked }));
+  };
+
+  const handleDlPhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => setDlPhoto(reader.result as string);
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleDlSignatureChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => setDlSignature(reader.result as string);
       reader.readAsDataURL(file);
     }
   };
@@ -601,6 +665,135 @@ export default function App() {
         showMessage('Print failed to open. Please try again.', 'Print failed');
       } else {
         track('ve_print_dialog_opened');
+      }
+    } finally {
+      setIsPaying(false);
+    }
+  };
+
+  const generateDlPDF = async (): Promise<boolean> => {
+    track('ve_dl_pdf_gen_start');
+    setIsGenerating(true);
+    let originalStyle: string | null = null;
+    let element: HTMLElement | null = null;
+    try {
+      element = document.getElementById('dl-a4-print');
+      if (!element) {
+        console.error('DL PDF target element not found');
+        return false;
+      }
+
+      originalStyle = element.style.cssText;
+      element.style.cssText = 'position:fixed; top:0; left:0; width:210mm; height:297mm; z-index:-1; display:block; background:white;';
+
+      const canvas = await html2canvas(element, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: '#ffffff',
+        width: 794,
+        height: 1123
+      });
+
+      element.style.cssText = originalStyle;
+      originalStyle = null;
+
+      const imgData = canvas.toDataURL('image/png');
+      const pdfDoc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      pdfDoc.addImage(imgData, 'PNG', 0, 0, 210, 297);
+      pdfDoc.save(`DL_${dlFormData.dlNo || 'License'}.pdf`);
+
+      await addDoc(collection(db, 'licenses'), {
+        ...dlFormData,
+        userId: user!.uid,
+        userEmail: user!.email,
+        createdAt: serverTimestamp(),
+      });
+
+      track('ve_dl_pdf_gen_success');
+      return true;
+    } catch (error) {
+      console.error('DL PDF error:', error);
+      return false;
+    } finally {
+      if (element && originalStyle !== null) {
+        element.style.cssText = originalStyle;
+      }
+      setIsGenerating(false);
+    }
+  };
+
+  const payAndDownloadDl = async () => {
+    if (isPaying || isGenerating) return;
+    if (!user) return;
+
+    track('ve_dl_download_pdf_click');
+    setIsPaying(true);
+    try {
+      const ok = await generateDlPDF();
+      if (!ok) {
+        showMessage('PDF generation failed. Please try again.', 'Generation failed');
+        return;
+      }
+      track('ve_dl_download_pdf_success');
+      setView('success');
+      confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
+      void refreshCredits(user);
+    } finally {
+      setIsPaying(false);
+    }
+  };
+
+  const triggerDlPrintIframe = (): boolean => {
+    const printEl = document.getElementById('dl-a4-print');
+    if (!printEl) return false;
+    let stylesHtml = '';
+    for (const node of document.head.querySelectorAll('style, link[rel="stylesheet"]')) {
+      stylesHtml += node.outerHTML;
+    }
+    const printIframe = document.createElement('iframe');
+    printIframe.style.cssText = 'position:absolute;top:-9999px;left:-9999px;width:0;height:0;';
+    document.body.appendChild(printIframe);
+    const iframeDoc = printIframe.contentWindow?.document;
+    if (!iframeDoc) {
+      if (document.body.contains(printIframe)) document.body.removeChild(printIframe);
+      return false;
+    }
+    iframeDoc.open();
+    iframeDoc.write(`<!DOCTYPE html><html><head>${stylesHtml}<style>
+      @page { size: A4 portrait; margin: 0; }
+      body { margin: 0; padding: 0; background: white; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+      #dl-a4-print {
+        position: relative !important;
+        left: 0 !important;
+        top: 0 !important;
+        width: 210mm !important;
+        height: 297mm !important;
+        display: block !important;
+        overflow: hidden;
+      }
+      .a4-field { position: absolute !important; white-space: nowrap; }
+    </style></head><body>${printEl.outerHTML}</body></html>`);
+    iframeDoc.close();
+    setTimeout(() => {
+      printIframe.contentWindow?.focus();
+      printIframe.contentWindow?.print();
+      setTimeout(() => { if (document.body.contains(printIframe)) document.body.removeChild(printIframe); }, 2000);
+    }, 600);
+    return true;
+  };
+
+  const payAndPrintDl = async () => {
+    if (isPaying || isGenerating) return;
+    if (!user) return;
+
+    track('ve_dl_print_click');
+    setIsPaying(true);
+    try {
+      const ok = triggerDlPrintIframe();
+      if (!ok) {
+        showMessage('Print failed to open. Please try again.', 'Print failed');
+      } else {
+        track('ve_dl_print_dialog_opened');
       }
     } finally {
       setIsPaying(false);
@@ -967,44 +1160,94 @@ export default function App() {
               <div className="text-center space-y-4">
                 <h1 className="text-5xl font-black tracking-tight text-slate-900">Vehicle Enrollment</h1>
                 <p className="text-slate-400 font-medium text-lg leading-relaxed text-center mx-auto max-w-md">
-                  Batch AI extraction for many PDFs, or enter one RC by hand — free download and print.
+                  Select a section to begin — Registration Certificate (RC) with batch AI or Driving License (DL).
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 max-w-3xl mx-auto">
-                <button
-                  type="button"
-                  onClick={() => {
-                    track('ve_mode_select', { mode: 'batch_list' });
-                    setView('batch-list');
-                  }}
-                  className="relative h-[300px] group text-left"
-                >
-                  <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center rounded-[2.5rem] border-[3px] border-dashed border-green-200 bg-green-50 group-hover:bg-green-100 transition-all">
-                    <LayoutGrid size={40} className="text-green-600 mb-4" />
-                    <h3 className="text-xl font-black text-slate-900 mb-2">Batch processing</h3>
-                    <p className="text-sm text-slate-500 font-medium">AI on multiple PDFs (per file; failures refunded)</p>
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    track('ve_mode_select', { mode: 'manual_entry' });
-                    setRcDataSource('manual');
-                    setFormData(initialData);
-                    setSignature(null);
-                    setView('form');
-                  }}
-                  className="relative h-[300px] group text-left"
-                >
-                  <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center rounded-[2.5rem] border-[3px] border-dashed border-slate-200 bg-slate-50 group-hover:bg-slate-100 transition-all">
-                    <FileText size={40} className="text-slate-600 mb-4" />
-                    <h3 className="text-xl font-black text-slate-900 mb-2">Manual entry</h3>
-                    <p className="text-sm text-slate-500 font-medium">Type details yourself — free PDF and print</p>
-                  </div>
-                </button>
+              {/* Service Selection Toggle */}
+              <div className="flex justify-center">
+                <div className="bg-slate-100 p-1.5 rounded-2xl flex gap-1.5 border border-slate-200 shadow-sm">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedService('rc')}
+                    className={`px-8 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${
+                      selectedService === 'rc'
+                        ? 'bg-white text-slate-900 shadow-md scale-[1.02]'
+                        : 'text-slate-500 hover:text-slate-900'
+                    }`}
+                  >
+                    RC Section
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedService('dl')}
+                    className={`px-8 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${
+                      selectedService === 'dl'
+                        ? 'bg-white text-slate-900 shadow-md scale-[1.02]'
+                        : 'text-slate-500 hover:text-slate-900'
+                    }`}
+                  >
+                    License Section
+                  </button>
+                </div>
               </div>
+
+              {selectedService === 'rc' ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 max-w-3xl mx-auto">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      track('ve_mode_select', { mode: 'batch_list' });
+                      setView('batch-list');
+                    }}
+                    className="relative h-[300px] group text-left"
+                  >
+                    <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center rounded-[2.5rem] border-[3px] border-dashed border-green-200 bg-green-50 group-hover:bg-green-100 transition-all">
+                      <LayoutGrid size={40} className="text-green-600 mb-4" />
+                      <h3 className="text-xl font-black text-slate-900 mb-2">Batch processing</h3>
+                      <p className="text-sm text-slate-500 font-medium">AI on multiple PDFs (per file; failures refunded)</p>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      track('ve_mode_select', { mode: 'manual_entry' });
+                      setRcDataSource('manual');
+                      setFormData(initialData);
+                      setSignature(null);
+                      setView('form');
+                    }}
+                    className="relative h-[300px] group text-left"
+                  >
+                    <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center rounded-[2.5rem] border-[3px] border-dashed border-slate-200 bg-slate-50 group-hover:bg-slate-100 transition-all">
+                      <FileText size={40} className="text-slate-600 mb-4" />
+                      <h3 className="text-xl font-black text-slate-900 mb-2">Manual entry</h3>
+                      <p className="text-sm text-slate-500 font-medium">Type details yourself — free PDF and print</p>
+                    </div>
+                  </button>
+                </div>
+              ) : (
+                <div className="max-w-md mx-auto">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      track('ve_mode_select', { mode: 'dl_manual_entry' });
+                      setDlFormData(initialDlData);
+                      setDlSignature(null);
+                      setDlPhoto(null);
+                      setView('form');
+                    }}
+                    className="w-full h-[300px] group text-left"
+                  >
+                    <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center rounded-[2.5rem] border-[3px] border-dashed border-blue-200 bg-blue-50/50 group-hover:bg-blue-100/60 transition-all">
+                      <FileText size={40} className="text-blue-600 mb-4" />
+                      <h3 className="text-xl font-black text-slate-900 mb-2">Driving License Form</h3>
+                      <p className="text-sm text-slate-500 font-medium">Type license details yourself — free PDF and print</p>
+                    </div>
+                  </button>
+                </div>
+              )}
             </motion.div>
           ) : view === 'batch-upload' ? (
             <BatchUpload
@@ -1030,14 +1273,19 @@ export default function App() {
                 <div className="flex items-center justify-between sticky top-0 bg-white/95 backdrop-blur-xl z-50 py-4 -translate-y-4 border-b border-slate-50">
                   <button 
                     onClick={() => {
-                      track('ve_workspace_back', { batch_edit: isBatchEditMode });
-                      if (isBatchEditMode) {
-                        setIsBatchEditMode(false);
-                        setSelectedBatchSubmissionId(null);
-                        setFormData(initialData);
-                        setSignature(null);
-                        setView('batch-list');
+                      if (selectedService === 'rc') {
+                        track('ve_workspace_back', { batch_edit: isBatchEditMode });
+                        if (isBatchEditMode) {
+                          setIsBatchEditMode(false);
+                          setSelectedBatchSubmissionId(null);
+                          setFormData(initialData);
+                          setSignature(null);
+                          setView('batch-list');
+                        } else {
+                          setView('mode-selection');
+                        }
                       } else {
+                        track('ve_workspace_back', { service: 'dl' });
                         setView('mode-selection');
                       }
                     }} 
@@ -1046,26 +1294,34 @@ export default function App() {
                     <RotateCcw size={14} /> Back
                   </button>
                   <span className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-600">
-                    {isBatchEditMode ? 'Batch Edit' : 'Unified Registry'}
+                    {selectedService === 'rc' ? (isBatchEditMode ? 'Batch Edit' : 'Unified Registry') : 'DL Registry'}
                   </span>
                 </div>
-                <div className="space-y-16">
-                  <FormSection step={0} formData={formData} onChange={handleInputChange} onFieldBlur={handleFormFieldBlur} />
-                  <FormSection step={1} formData={formData} onChange={handleInputChange} onFieldBlur={handleFormFieldBlur} />
-                  <FormSection step={2} formData={formData} onChange={handleInputChange} onFieldBlur={handleFormFieldBlur} />
-                  <FormSection step={3} formData={formData} onChange={handleInputChange} onFieldBlur={handleFormFieldBlur} />
-                  <FormSection step={4} formData={formData} onChange={handleInputChange} onFieldBlur={handleFormFieldBlur} onSign={handleSignatureChange} signature={signature} />
-                </div>
+                {selectedService === 'rc' ? (
+                  <div className="space-y-16">
+                    <FormSection step={0} formData={formData} onChange={handleInputChange} onFieldBlur={handleFormFieldBlur} />
+                    <FormSection step={1} formData={formData} onChange={handleInputChange} onFieldBlur={handleFormFieldBlur} />
+                    <FormSection step={2} formData={formData} onChange={handleInputChange} onFieldBlur={handleFormFieldBlur} />
+                    <FormSection step={3} formData={formData} onChange={handleInputChange} onFieldBlur={handleFormFieldBlur} />
+                    <FormSection step={4} formData={formData} onChange={handleInputChange} onFieldBlur={handleFormFieldBlur} onSign={handleSignatureChange} signature={signature} />
+                  </div>
+                ) : (
+                  <div className="space-y-16">
+                    <DlFormSection step={0} formData={dlFormData} onChange={handleDlInputChange} onCheckboxChange={handleDlCheckboxChange} onFieldBlur={handleFormFieldBlur} />
+                    <DlFormSection step={1} formData={dlFormData} onChange={handleDlInputChange} onCheckboxChange={handleDlCheckboxChange} onFieldBlur={handleFormFieldBlur} />
+                    <DlFormSection step={2} formData={dlFormData} onChange={handleDlInputChange} onCheckboxChange={handleDlCheckboxChange} onFieldBlur={handleFormFieldBlur} onSign={handleDlSignatureChange} signature={dlSignature} onPhoto={handleDlPhotoChange} photo={dlPhoto} />
+                  </div>
+                )}
                 <div className="fixed bottom-0 left-0 lg:w-[460px] w-full p-6 bg-white/95 backdrop-blur-2xl border-t border-slate-100 z-50 flex gap-4 no-print">
                   <button
                     title="Print to A4 (free)"
-                    onClick={payAndPrint}
+                    onClick={selectedService === 'rc' ? payAndPrint : payAndPrintDl}
                     disabled={isPaying || isGenerating}
                     className="w-16 h-16 rounded-2xl flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed bg-slate-100 text-slate-500 hover:bg-slate-200"
                   >
                     <Printer size={22} />
                   </button>
-                  {isBatchEditMode && (
+                  {selectedService === 'rc' && isBatchEditMode && (
                     <button 
                       onClick={async () => {
                         if (!selectedBatchSubmissionId) return;
@@ -1090,7 +1346,7 @@ export default function App() {
                     </button>
                   )}
                   <button
-                    onClick={payAndDownload}
+                    onClick={selectedService === 'rc' ? payAndDownload : payAndDownloadDl}
                     disabled={isGenerating || isPaying}
                     className="flex-1 h-16 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest shadow-xl flex items-center justify-center gap-4 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
@@ -1117,8 +1373,13 @@ export default function App() {
                   <button
                     onClick={() => {
                       track('ve_layout_reset_click');
-                      localStorage.removeItem(LAYOUT_STORAGE_KEY);
-                      localStorage.removeItem(TEMPLATE_STORAGE_KEY);
+                      if (selectedService === 'rc') {
+                        localStorage.removeItem(LAYOUT_STORAGE_KEY);
+                        localStorage.removeItem(TEMPLATE_STORAGE_KEY);
+                      } else {
+                        localStorage.removeItem(DL_LAYOUT_STORAGE_KEY);
+                        localStorage.removeItem(DL_TEMPLATE_STORAGE_KEY);
+                      }
                       setLayoutResetTick(t => t + 1);
                     }}
                     className="px-4 text-[10px] font-black uppercase tracking-widest rounded-xl border bg-white text-slate-500 border-slate-200 hover:bg-slate-50"
@@ -1145,25 +1406,48 @@ export default function App() {
                   <button onClick={() => setZoom(z => Math.min(2, z + 0.1))} className="p-3 text-slate-400"><ZoomIn size={18} /></button>
                 </div>
                 <div className="flex-1 overflow-auto bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:24px_24px] flex items-center justify-center p-12">
-                  {/* Card preview at exact 85.60mm x 53.98mm ratio */}
-                  <motion.div
-                    animate={{ scale: zoom }}
-                    className="shadow-[0_40px_80px_-20px_rgba(0,0,0,0.15)] bg-white ring-1 ring-slate-200 relative"
-                    style={{
-                      width: isLayoutEditing ? '860px' : '560px',
-                      height: `${560 / CARD_ASPECT}px`,
-                      overflow: 'hidden',
-                      flexShrink: 0,
-                    }}
-                  >
-                    <CardPreview
-                      data={formData}
-                      signature={signature}
-                      isLayoutEditing={isLayoutEditing}
-                      layoutResetTick={layoutResetTick}
-                      templateSaveTick={templateSaveTick}
-                    />
-                  </motion.div>
+                  {selectedService === 'rc' ? (
+                    /* Card preview at exact 85.60mm x 53.98mm ratio */
+                    <motion.div
+                      animate={{ scale: zoom }}
+                      className="shadow-[0_40px_80px_-20px_rgba(0,0,0,0.15)] bg-white ring-1 ring-slate-200 relative"
+                      style={{
+                        width: isLayoutEditing ? '860px' : '560px',
+                        height: `${560 / CARD_ASPECT}px`,
+                        overflow: 'hidden',
+                        flexShrink: 0,
+                      }}
+                    >
+                      <CardPreview
+                        data={formData}
+                        signature={signature}
+                        isLayoutEditing={isLayoutEditing}
+                        layoutResetTick={layoutResetTick}
+                        templateSaveTick={templateSaveTick}
+                      />
+                    </motion.div>
+                  ) : (
+                    /* Card preview at exact 86x53mm ratio */
+                    <motion.div
+                      animate={{ scale: zoom }}
+                      className="shadow-[0_40px_80px_-20px_rgba(0,0,0,0.15)] bg-white ring-1 ring-slate-200 relative animate-none"
+                      style={{
+                        width: isLayoutEditing ? '860px' : '560px',
+                        height: isLayoutEditing ? '530px' : '345px',
+                        overflow: 'hidden',
+                        flexShrink: 0,
+                      }}
+                    >
+                      <DlCardPreview
+                        data={dlFormData}
+                        photo={dlPhoto}
+                        signature={dlSignature}
+                        isLayoutEditing={isLayoutEditing}
+                        layoutResetTick={layoutResetTick}
+                        templateSaveTick={templateSaveTick}
+                      />
+                    </motion.div>
+                  )}
                 </div>
               </div>
             </motion.div>
@@ -1175,15 +1459,23 @@ export default function App() {
               <h2 className="text-4xl font-black mb-4 text-slate-900">All Set!</h2>
               <button 
                 onClick={() => { 
-                  track('ve_success_continue', { batch_edit: isBatchEditMode });
-                  setFormData(initialData); 
-                  setSignature(null);
-                  setRcDataSource('manual');
-                  if (isBatchEditMode) {
-                    setIsBatchEditMode(false);
-                    setSelectedBatchSubmissionId(null);
-                    setView('batch-list');
+                  if (selectedService === 'rc') {
+                    track('ve_success_continue', { batch_edit: isBatchEditMode });
+                    setFormData(initialData); 
+                    setSignature(null);
+                    setRcDataSource('manual');
+                    if (isBatchEditMode) {
+                      setIsBatchEditMode(false);
+                      setSelectedBatchSubmissionId(null);
+                      setView('batch-list');
+                    } else {
+                      setView('mode-selection');
+                    }
                   } else {
+                    track('ve_success_continue', { service: 'dl' });
+                    setDlFormData(initialDlData);
+                    setDlSignature(null);
+                    setDlPhoto(null);
                     setView('mode-selection');
                   }
                 }} 
@@ -1672,6 +1964,575 @@ function CardPreview({
   );
 }
 
+const DL_LAYOUT_STORAGE_KEY = 'dl_calibration_layout';
+const DL_TEMPLATE_STORAGE_KEY = 'dl_global_template_layout';
+
+const DEFAULT_DL_TEMPLATE_LAYOUT: Record<string, Partial<{ x: number; y: number; w: number; h: number; fontSize: number; bold: boolean }>> = {
+  dlNo: { x: 30.0, y: 5.5, w: 38.1, h: 1.6, fontSize: 6.5, bold: false },
+  doi: { x: 42.5, y: 26.3, w: 25.4, h: 3.0, fontSize: 6, bold: false },
+  name: { x: 30.0, y: 8.3, w: 38.1, h: 1.6, fontSize: 6, bold: false },
+  swdOf: { x: 30.0, y: 11.4, w: 38.1, h: 1.6, fontSize: 6, bold: false },
+  dob: { x: 30.0, y: 14.2, w: 25.4, h: 1.6, fontSize: 6, bold: false },
+  bloodGroup: { x: 30.0, y: 17.1, w: 25.4, h: 1.6, fontSize: 6, bold: false },
+  address: { x: 30.0, y: 20.0, w: 45.7, h: 5.0, fontSize: 4.2, bold: false },
+  validNt: { x: 61.2, y: 14.2, w: 20.3, h: 1.6, fontSize: 6, bold: false },
+  mcwgIcon: { x: 30.0, y: 34.3, w: 6.7, h: 3.6 },
+  mcwgType: { x: 42.5, y: 34.3, w: 10.0, h: 3.6, fontSize: 6.5, bold: true },
+  mcwgDate: { x: 58.0, y: 34.3, w: 18.0, h: 3.6, fontSize: 6.5, bold: true },
+  lmvIcon: { x: 30.0, y: 38.0, w: 6.7, h: 3.6 },
+  lmvType: { x: 42.5, y: 38.0, w: 10.0, h: 3.6, fontSize: 6.5, bold: true },
+  photo: { x: 1.8, y: 5.6, w: 13.7, h: 17.3 },
+  qrCode: { x: 3.4, y: 26.3, w: 23.2, h: 23.1 },
+  signature: { x: 61.2, y: 40.0, w: 13.7, h: 4.0 },
+  issuingAuthority: { x: 30.0, y: 47.0, w: 45.7, h: 3.8, fontSize: 6, bold: false },
+};
+
+export function DlCardPreview({
+  data,
+  photo,
+  signature,
+  isLayoutEditing,
+  layoutResetTick,
+  templateSaveTick,
+}: {
+  data: DlFormData;
+  photo: string | null;
+  signature: string | null;
+  isLayoutEditing: boolean;
+  layoutResetTick: number;
+  templateSaveTick: number;
+}) {
+  const DL_CARD_ASPECT = 86 / 53;
+
+  const getLayout = () => {
+    try {
+      const saved =
+        localStorage.getItem(DL_TEMPLATE_STORAGE_KEY) ||
+        localStorage.getItem(DL_LAYOUT_STORAGE_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return null;
+  };
+
+  const [layout, setLayout] = useState<Record<string, any>>(getLayout() ?? {});
+  const [selectedField, setSelectedField] = useState<string | null>(null);
+  const [draggingField, setDraggingField] = useState<string | null>(null);
+  const [resizingField, setResizingField] = useState<string | null>(null);
+  const [fontSizingField, setFontSizingField] = useState<string | null>(null);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [resizeStart, setResizeStart] = useState({ mouseX: 0, mouseY: 0, w: 0, h: 0 });
+  const [fontSizeStart, setFontSizeStart] = useState({ mouseY: 0, fontSize: 0 });
+
+  const qrPayload = `Licence No:${data.dlNo || ''} Name:${data.name || ''} DOB:${data.dob || ''} DOI:${data.doi || ''} Valid NT:${data.validNt || ''}`;
+
+  useEffect(() => {
+    setLayout(getLayout() ?? {});
+    setSelectedField(null);
+  }, [layoutResetTick]);
+
+  useEffect(() => {
+    if (!templateSaveTick) return;
+    localStorage.setItem(DL_TEMPLATE_STORAGE_KEY, JSON.stringify(layout));
+    localStorage.setItem(DL_LAYOUT_STORAGE_KEY, JSON.stringify(layout));
+  }, [templateSaveTick, layout]);
+
+  useEffect(() => {
+    if (!isLayoutEditing) {
+      setDraggingField(null);
+      setResizingField(null);
+      setFontSizingField(null);
+    }
+  }, [isLayoutEditing]);
+
+  const CARD_WIDTH_MM = 86;
+  const PREVIEW_W = isLayoutEditing ? 860 : 560;
+  const PREVIEW_H = PREVIEW_W / DL_CARD_ASPECT;
+  const PP_MM = PREVIEW_W / CARD_WIDTH_MM; // Pixels per millimeter
+  const PREVIEW_PPI = PREVIEW_W / (CARD_WIDTH_MM / 25.4); // Pixels per inch for font-size
+
+  const validNtValue = data.validNt ? `(NT) ${data.validNt}` : '';
+
+  type FieldDef = {
+    key: string;
+    value: string;
+    bold?: boolean;
+    isQR?: boolean;
+    isSig?: boolean;
+    isPhoto?: boolean;
+    isIcon?: boolean;
+    iconSrc?: string;
+    dx: number;
+    dy: number;
+    dw: number;
+    dh: number;
+    dSize: number;
+  };
+
+  const FDEFS: FieldDef[] = [
+    { key: 'dlNo', dx: 30.0, dy: 5.5, dw: 38.1, dh: 1.6, dSize: 6.5, bold: false, value: data.dlNo },
+    { key: 'doi', dx: 42.5, dy: 26.3, dw: 25.4, dh: 3.0, dSize: 6, bold: false, value: data.doi },
+    { key: 'name', dx: 30.0, dy: 8.3, dw: 38.1, dh: 1.6, dSize: 6, bold: false, value: data.name },
+    { key: 'swdOf', dx: 30.0, dy: 11.4, dw: 38.1, dh: 1.6, dSize: 6, bold: false, value: data.swdOf },
+    { key: 'dob', dx: 30.0, dy: 14.2, dw: 25.4, dh: 1.6, dSize: 6, bold: false, value: data.dob },
+    { key: 'bloodGroup', dx: 30.0, dy: 17.1, dw: 25.4, dh: 1.6, dSize: 6, bold: false, value: data.bloodGroup },
+    { key: 'address', dx: 30.0, dy: 20.0, dw: 45.7, dh: 5.0, dSize: 4.2, bold: false, value: data.address },
+    { key: 'validNt', dx: 61.2, dy: 14.2, dw: 20.3, dh: 1.6, dSize: 6, bold: false, value: validNtValue },
+    { key: 'mcwgIcon', dx: 30.0, dy: 34.3, dw: 6.7, dh: 3.6, dSize: 0, isIcon: true, iconSrc: '/MCWG.png', value: '' },
+    { key: 'mcwgType', dx: 42.5, dy: 34.3, dw: 10.0, dh: 3.6, dSize: 6.5, bold: true, value: 'MCWG' },
+    { key: 'mcwgDate', dx: 58.0, dy: 34.3, dw: 18.0, dh: 3.6, dSize: 6.5, bold: true, value: data.mcwgIssueDate },
+    { key: 'lmvIcon', dx: 30.0, dy: 38.0, dw: 6.7, dh: 3.6, dSize: 0, isIcon: true, iconSrc: '/LMV.png', value: '' },
+    { key: 'lmvType', dx: 42.5, dy: 38.0, dw: 10.0, dh: 3.6, dSize: 6.5, bold: true, value: 'LMV' },
+    { key: 'lmvDate', dx: 58.0, dy: 38.0, dw: 18.0, dh: 3.6, dSize: 6.5, bold: true, value: data.lmvIssueDate },
+    { key: 'photo', dx: 1.8, dy: 5.6, dw: 13.7, dh: 17.3, dSize: 0, isPhoto: true, value: '' },
+    { key: 'qrCode', dx: 3.4, dy: 26.3, dw: 23.2, dh: 23.1, dSize: 0, isQR: true, value: '' },
+    { key: 'signature', dx: 61.2, dy: 40.0, dw: 13.7, dh: 4.0, dSize: 0, isSig: true, value: '' },
+    { key: 'issuingAuthority', dx: 30.0, dy: 47.0, dw: 45.7, dh: 3.8, dSize: 6, bold: false, value: `Issuing Authority ${data.issuingAuthority}` },
+  ];
+
+  const resolved = FDEFS.map(f => {
+    const templateDefaults = DEFAULT_DL_TEMPLATE_LAYOUT[f.key] ?? {};
+    const p = layout?.[f.key] ?? templateDefaults;
+    return {
+      ...f,
+      x: p?.x ?? templateDefaults.x ?? f.dx,
+      y: p?.y ?? templateDefaults.y ?? f.dy,
+      w: p?.w ?? templateDefaults.w ?? f.dw,
+      h: p?.h ?? templateDefaults.h ?? f.dh,
+      size: p?.fontSize ?? templateDefaults.fontSize ?? f.dSize,
+      bold: p?.bold ?? templateDefaults.bold ?? f.bold ?? false,
+    };
+  });
+
+  const selectedResolved = selectedField ? resolved.find((f) => f.key === selectedField) : null;
+
+  const persistLayout = (next: Record<string, any>) => {
+    setLayout(next);
+  };
+
+  const updateSelectedField = (key: 'x' | 'y' | 'w' | 'h' | 'fontSize', value: string) => {
+    if (!selectedField) return;
+    const parsed = parseFloat(value);
+    if (Number.isNaN(parsed)) return;
+    const clamped =
+      key === 'fontSize'
+        ? Math.max(4, Math.min(28, parsed))
+        : key === 'w'
+        ? Math.max(2.0, parsed)
+        : key === 'h'
+        ? Math.max(1.0, parsed)
+        : Math.max(0, parsed);
+    persistLayout({
+      ...layout,
+      [selectedField]: {
+        ...(layout[selectedField] ?? {}),
+        [key]: +clamped.toFixed(1),
+      },
+    });
+  };
+
+  const onCanvasMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isLayoutEditing || (!draggingField && !resizingField && !fontSizingField)) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (!rect) return;
+    const scaleX = rect.width / PREVIEW_W;
+    const scaleY = rect.height / PREVIEW_H;
+
+    if (draggingField) {
+      const field = resolved.find((f) => f.key === draggingField);
+      if (!field) return;
+      const rawPxX = e.clientX - rect.left - dragOffset.x;
+      const rawPxY = e.clientY - rect.top - dragOffset.y;
+      const maxLeftPx = rect.width - field.w * PP_MM * scaleX;
+      const maxTopPx = rect.height - field.h * PP_MM * scaleY;
+      const nextX = +(Math.max(0, Math.min(rawPxX, maxLeftPx)) / (PP_MM * scaleX)).toFixed(1);
+      const nextY = +(Math.max(0, Math.min(rawPxY, maxTopPx)) / (PP_MM * scaleY)).toFixed(1);
+      persistLayout({
+        ...layout,
+        [draggingField]: { ...(layout[draggingField] ?? {}), x: nextX, y: nextY },
+      });
+    }
+
+    if (resizingField) {
+      const dx = e.clientX - resizeStart.mouseX;
+      const dy = e.clientY - resizeStart.mouseY;
+      const nextW = +Math.max(2.0, resizeStart.w + dx / (PP_MM * scaleX)).toFixed(1);
+      const nextH = +Math.max(1.0, resizeStart.h + dy / (PP_MM * scaleY)).toFixed(1);
+      persistLayout({
+        ...layout,
+        [resizingField]: { ...(layout[resizingField] ?? {}), w: nextW, h: nextH },
+      });
+    }
+
+    if (fontSizingField) {
+      const dy = e.clientY - fontSizeStart.mouseY;
+      const deltaPt = -(dy / 4);
+      const nextFont = +Math.max(4, Math.min(28, fontSizeStart.fontSize + deltaPt)).toFixed(1);
+      persistLayout({
+        ...layout,
+        [fontSizingField]: { ...(layout[fontSizingField] ?? {}), fontSize: nextFont },
+      });
+    }
+  };
+
+  return (
+    <>
+      <div className="w-full h-full flex bg-white">
+        <div
+          id="dl-card-preview"
+          className="relative bg-white font-sans overflow-hidden border-r border-slate-200"
+          style={{ width: `${PREVIEW_W}px`, height: `${PREVIEW_H}px` }}
+          onMouseMove={onCanvasMouseMove}
+          onMouseUp={() => {
+            setDraggingField(null);
+            setResizingField(null);
+            setFontSizingField(null);
+          }}
+          onMouseLeave={() => {
+            setDraggingField(null);
+            setResizingField(null);
+            setFontSizingField(null);
+          }}
+        >
+          {isLayoutEditing && (
+            <>
+              <div
+                className="absolute inset-0 pointer-events-none"
+                style={{
+                  backgroundImage: `url(/dl-calibration-bg.png)`,
+                  backgroundSize: 'cover',
+                  backgroundPosition: 'center',
+                  backgroundRepeat: 'no-repeat',
+                  opacity: 0.5,
+                  mixBlendMode: 'multiply',
+                }}
+              />
+              <div className="absolute inset-0 pointer-events-none bg-blue-600/[0.03] mix-blend-color" />
+            </>
+          )}
+
+          {resolved.map((f, i) => {
+            const left = f.x * PP_MM;
+            const top = f.y * PP_MM;
+            const width = f.w * PP_MM;
+            const height = f.h * PP_MM;
+
+            const onFieldMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+              if (!isLayoutEditing) return;
+              if ((e.target as HTMLElement).dataset.resizeHandle) return;
+              if ((e.target as HTMLElement).dataset.fontHandle) return;
+              e.preventDefault();
+              e.stopPropagation();
+              setSelectedField(f.key);
+              setDraggingField(f.key);
+              const rect = e.currentTarget.parentElement?.getBoundingClientRect();
+              if (!rect) return;
+              const scaleX = rect.width / PREVIEW_W;
+              const scaleY = rect.height / PREVIEW_H;
+              setDragOffset({ x: e.clientX - rect.left - left * scaleX, y: e.clientY - rect.top - top * scaleY });
+            };
+
+            const onResizeMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+              if (!isLayoutEditing) return;
+              e.preventDefault();
+              e.stopPropagation();
+              setSelectedField(f.key);
+              setResizingField(f.key);
+              setResizeStart({ mouseX: e.clientX, mouseY: e.clientY, w: f.w, h: f.h });
+            };
+
+            const onFontSizeMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+              if (!isLayoutEditing || f.isQR || f.isSig || f.isPhoto || f.isIcon) return;
+              e.preventDefault();
+              e.stopPropagation();
+              setSelectedField(f.key);
+              setFontSizingField(f.key);
+              setFontSizeStart({ mouseY: e.clientY, fontSize: f.size || 6 });
+            };
+
+            if (f.isQR) return (
+              <div
+                key={i}
+                className={`absolute ${isLayoutEditing ? 'cursor-move' : ''}`}
+                style={{ left, top, width, height, border: isLayoutEditing ? '1px dashed #2563eb' : 'none' }}
+                onMouseDown={onFieldMouseDown}
+              >
+                <QRCodeSVG value={qrPayload} size={width} level="L" />
+                {isLayoutEditing && (
+                  <div
+                    data-resize-handle="1"
+                    onMouseDown={onResizeMouseDown}
+                    className="absolute w-3 h-3 bg-blue-600 border border-white rounded-full"
+                    style={{ right: -6, bottom: -6, cursor: 'nwse-resize' }}
+                  />
+                )}
+              </div>
+            );
+
+            if (f.isSig) return (
+              <div
+                key={i}
+                className={`absolute ${isLayoutEditing ? 'cursor-move' : ''}`}
+                style={{
+                  left,
+                  top,
+                  width,
+                  height,
+                  border: isLayoutEditing ? '1px dashed #9333ea' : 'none',
+                  background: isLayoutEditing ? 'rgba(147,51,234,0.07)' : 'transparent',
+                }}
+                onMouseDown={onFieldMouseDown}
+              >
+                {signature ? (
+                  <img src={signature} className="w-full h-full object-contain mix-blend-multiply" />
+                ) : (
+                  isLayoutEditing && <div className="text-[8px] text-purple-400 font-bold flex items-center justify-center h-full">Signature</div>
+                )}
+                {isLayoutEditing && (
+                  <div
+                    data-resize-handle="1"
+                    onMouseDown={onResizeMouseDown}
+                    className="absolute w-3 h-3 bg-purple-600 border border-white rounded-full"
+                    style={{ right: -6, bottom: -6, cursor: 'nwse-resize' }}
+                  />
+                )}
+              </div>
+            );
+
+            if (f.isPhoto) return (
+              <div
+                key={i}
+                className={`absolute ${isLayoutEditing ? 'cursor-move' : ''}`}
+                style={{
+                  left,
+                  top,
+                  width,
+                  height,
+                  border: isLayoutEditing ? '1px dashed #e11d48' : 'none',
+                  background: isLayoutEditing ? 'rgba(225,29,72,0.07)' : 'transparent',
+                }}
+                onMouseDown={onFieldMouseDown}
+              >
+                {photo ? (
+                  <img src={photo} className="w-full h-full object-cover rounded" />
+                ) : (
+                  <div className="w-full h-full bg-slate-100 rounded border border-slate-200 flex items-center justify-center">
+                    <span className="text-[10px] text-slate-400 font-bold">Photo</span>
+                  </div>
+                )}
+                {isLayoutEditing && (
+                  <div
+                    data-resize-handle="1"
+                    onMouseDown={onResizeMouseDown}
+                    className="absolute w-3 h-3 bg-rose-600 border border-white rounded-full"
+                    style={{ right: -6, bottom: -6, cursor: 'nwse-resize' }}
+                  />
+                )}
+              </div>
+            );
+
+            if (f.isIcon) {
+              const showIcon = f.key === 'mcwgIcon' ? data.hasMcwg : data.hasLmv;
+              if (!showIcon && !isLayoutEditing) return null;
+              return (
+                <div
+                  key={i}
+                  className={`absolute ${isLayoutEditing ? 'cursor-move' : ''}`}
+                  style={{
+                    left,
+                    top,
+                    width,
+                    height,
+                    opacity: showIcon ? 1 : 0.3,
+                    border: isLayoutEditing ? '1px dashed #f59e0b' : 'none',
+                    background: isLayoutEditing ? 'rgba(245,158,11,0.07)' : 'transparent',
+                  }}
+                  onMouseDown={onFieldMouseDown}
+                >
+                  <img src={f.iconSrc} className="w-full h-full object-contain" />
+                  {isLayoutEditing && (
+                    <div
+                      data-resize-handle="1"
+                      onMouseDown={onResizeMouseDown}
+                      className="absolute w-3 h-3 bg-amber-500 border border-white rounded-full"
+                      style={{ right: -6, bottom: -6, cursor: 'nwse-resize' }}
+                    />
+                  )}
+                </div>
+              );
+            }
+
+            if (f.key.startsWith('mcwg') && !data.hasMcwg && !isLayoutEditing) return null;
+            if (f.key.startsWith('lmv') && !data.hasLmv && !isLayoutEditing) return null;
+
+            return (
+              <div
+                key={i}
+                className={`absolute leading-tight ${isLayoutEditing ? 'cursor-move' : ''}`}
+                style={{
+                  left, top, width, height,
+                  fontSize: `${(f.size / 72) * PREVIEW_PPI}px`,
+                  fontWeight: f.bold ? 900 : 400,
+                  color: '#111',
+                  fontFamily: 'Arial, Helvetica, sans-serif',
+                  whiteSpace: f.key === 'address' ? 'pre-line' : 'nowrap',
+                  letterSpacing: '0.02em',
+                  lineHeight: f.key === 'address' ? '1.15' : '1',
+                  border: isLayoutEditing ? `1px dashed ${selectedField === f.key ? '#0f172a' : '#64748b'}` : 'none',
+                  background: isLayoutEditing ? 'rgba(255,255,255,0.2)' : 'transparent',
+                }}
+                onMouseDown={onFieldMouseDown}
+              >
+                {f.value}
+                {isLayoutEditing && (
+                  <>
+                    <div
+                      data-resize-handle="1"
+                      onMouseDown={onResizeMouseDown}
+                      className="absolute w-3 h-3 bg-slate-700 border border-white rounded-full"
+                      style={{ right: -6, bottom: -6, cursor: 'nwse-resize' }}
+                    />
+                    <div
+                      data-font-handle="1"
+                      onMouseDown={onFontSizeMouseDown}
+                      className="absolute w-3 h-3 bg-emerald-600 border border-white rounded-full"
+                      style={{ right: -6, top: -6, cursor: 'ns-resize' }}
+                      title="Drag up/down to change font size"
+                    />
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {isLayoutEditing && (
+          <div className="w-[300px] h-full bg-slate-50 p-4 overflow-y-auto">
+            <div className="rounded-xl bg-white border border-slate-200 shadow-sm p-3">
+              <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 mb-2">Field Inspector</div>
+              {selectedResolved ? (
+                <>
+                  <div className="text-xs font-bold text-slate-800 mb-3">{selectedResolved.key}</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="text-[10px] font-bold text-slate-500">
+                      X (in)
+                      <input
+                        type="number"
+                        step="0.001"
+                        value={selectedResolved.x}
+                        onChange={(e) => updateSelectedField('x', e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-700 bg-white"
+                      />
+                    </label>
+                    <label className="text-[10px] font-bold text-slate-500">
+                      Y (in)
+                      <input
+                        type="number"
+                        step="0.001"
+                        value={selectedResolved.y}
+                        onChange={(e) => updateSelectedField('y', e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-700 bg-white"
+                      />
+                    </label>
+                    <label className="text-[10px] font-bold text-slate-500">
+                      W (in)
+                      <input
+                        type="number"
+                        step="0.001"
+                        value={selectedResolved.w}
+                        onChange={(e) => updateSelectedField('w', e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-700 bg-white"
+                      />
+                    </label>
+                    <label className="text-[10px] font-bold text-slate-500">
+                      H (in)
+                      <input
+                        type="number"
+                        step="0.001"
+                        value={selectedResolved.h}
+                        onChange={(e) => updateSelectedField('h', e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-700 bg-white"
+                      />
+                    </label>
+                  </div>
+                  {!selectedResolved.isQR && !selectedResolved.isSig && !selectedResolved.isPhoto && (
+                    <label className="block text-[10px] font-bold text-slate-500 mt-2">
+                      Font Size (pt)
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={selectedResolved.size}
+                        onChange={(e) => updateSelectedField('fontSize', e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-700 bg-white"
+                      />
+                    </label>
+                  )}
+                </>
+              ) : (
+                <div className="text-[11px] text-slate-500 font-medium">
+                  Select any field on the card to edit its values here.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Hidden A4 print target for DL */}
+      <div id="dl-a4-print" style={{ position: 'fixed', left: '-9999px', top: '-9999px', width: '794px', height: '1123px', background: 'white', display: 'block' }}>
+        {resolved.map((f, i) => {
+          const px = (v: number) => `${v * 96}px`;
+
+          if (f.isQR) return (
+            <div key={i} className="a4-field" style={{ position: 'absolute', left: px(f.x), top: px(f.y), width: px(f.w), height: px(f.h) }}>
+              <QRCodeSVG value={qrPayload} size={f.w * 96} level="L" />
+            </div>
+          );
+
+          if (f.isSig) return signature ? (
+            <img key={i} src={signature} className="a4-field object-contain mix-blend-multiply"
+              style={{ position: 'absolute', left: px(f.x), top: px(f.y), width: px(f.w), height: px(f.h) }} />
+          ) : null;
+
+          if (f.isPhoto) return photo ? (
+            <img key={i} src={photo} className="a4-field object-cover rounded"
+              style={{ position: 'absolute', left: px(f.x), top: px(f.y), width: px(f.w), height: px(f.h) }} />
+          ) : null;
+
+          if (f.isIcon) {
+            const showIcon = f.key === 'mcwgIcon' ? data.hasMcwg : data.hasLmv;
+            if (!showIcon) return null;
+            return (
+              <img key={i} src={f.iconSrc} className="a4-field object-contain"
+                style={{ position: 'absolute', left: px(f.x), top: px(f.y), width: px(f.w), height: px(f.h) }} />
+            );
+          }
+
+          if (f.key.startsWith('mcwg') && !data.hasMcwg) return null;
+          if (f.key.startsWith('lmv') && !data.hasLmv) return null;
+
+          return (
+            <div key={i} className="a4-field"
+              style={{
+                position: 'absolute', left: px(f.x), top: px(f.y),
+                width: px(f.w), height: px(f.h),
+                fontSize: `${f.size}pt`,
+                fontFamily: 'Arial, Helvetica, sans-serif',
+                fontWeight: f.bold ? 900 : 400,
+                color: '#111',
+                textTransform: 'none',
+                whiteSpace: f.key === 'address' ? 'pre-line' : 'nowrap',
+                letterSpacing: '0.03em',
+                lineHeight: f.key === 'address' ? '1.15' : '1',
+              }}>
+              {f.value}
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
 
 
 function FormInput({ label, name, placeholder, type = "text", formData, onChange, onBlur, maxLength }: any) {
@@ -1755,6 +2616,96 @@ function FormSection({ step, formData, onChange, onFieldBlur, onSign, signature 
           <input type="file" accept="image/*" onChange={onSign} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
           <div className="w-full bg-slate-50/50 border border-slate-100 rounded-2xl px-6 py-5 font-bold text-center text-slate-400 group-hover:bg-white transition-all text-sm truncate">
             {signature ? 'Signature Uploaded' : 'Upload Signature'}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+  return null;
+}
+
+export function DlFormSection({ step, formData, onChange, onCheckboxChange, onFieldBlur, onSign, signature, onPhoto, photo }: any) {
+  if (step === 0) return (
+    <div className="grid grid-cols-2 gap-8">
+      <FormInput formData={formData} onChange={onChange} onBlur={onFieldBlur} label="Licence No" name="dlNo" placeholder="DL-1420110012345" />
+      <FormInput formData={formData} onChange={onChange} onBlur={onFieldBlur} label="Date of Issue" name="doi" placeholder="DD-MM-YYYY" />
+      <FormInput formData={formData} onChange={onChange} onBlur={onFieldBlur} label="Valid Till" name="validNt" placeholder="DD-MM-YYYY" />
+    </div>
+  );
+  if (step === 1) return (
+    <div className="space-y-8">
+      <div className="grid grid-cols-2 gap-8">
+        <FormInput formData={formData} onChange={onChange} onBlur={onFieldBlur} label="Name" name="name" placeholder="SHIL KUMAR" />
+        <FormInput formData={formData} onChange={onChange} onBlur={onFieldBlur} label="S/D/W Of" name="swdOf" placeholder="Father/Husband Name" />
+        <FormInput formData={formData} onChange={onChange} onBlur={onFieldBlur} label="Date of Birth" name="dob" placeholder="DD-MM-YYYY" />
+        <FormInput formData={formData} onChange={onChange} onBlur={onFieldBlur} label="Blood Group" name="bloodGroup" placeholder="O+" />
+      </div>
+      <div className="space-y-3">
+        <label className="block text-[10px] font-black uppercase tracking-[0.25em] text-slate-400 ml-1">Address</label>
+        <textarea
+          name="address"
+          value={formData.address || ''}
+          onChange={onChange}
+          onBlur={onFieldBlur}
+          rows={3}
+          placeholder="Detailed residential address..."
+          className="w-full bg-slate-50/50 border border-slate-100 rounded-3xl p-6 font-bold outline-none focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-100/20 transition-all text-sm shadow-sm placeholder:text-slate-200"
+        />
+      </div>
+    </div>
+  );
+  if (step === 2) return (
+    <div className="space-y-8">
+      <div className="grid grid-cols-2 gap-8 bg-slate-50/30 p-6 rounded-2xl border border-slate-100/80">
+        <div className="space-y-4">
+          <label className="flex items-center gap-3 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              name="hasMcwg"
+              checked={!!formData.hasMcwg}
+              onChange={onCheckboxChange}
+              className="w-5 h-5 rounded-lg border-slate-300 text-blue-600 focus:ring-blue-500/20"
+            />
+            <span className="text-sm font-bold text-slate-700">MCWG class</span>
+          </label>
+          {formData.hasMcwg && (
+            <FormInput formData={formData} onChange={onChange} onBlur={onFieldBlur} label="MCWG Issue Date" name="mcwgIssueDate" placeholder="DD-MM-YYYY" />
+          )}
+        </div>
+        <div className="space-y-4">
+          <label className="flex items-center gap-3 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              name="hasLmv"
+              checked={!!formData.hasLmv}
+              onChange={onCheckboxChange}
+              className="w-5 h-5 rounded-lg border-slate-300 text-blue-600 focus:ring-blue-500/20"
+            />
+            <span className="text-sm font-bold text-slate-700">LMV class</span>
+          </label>
+          {formData.hasLmv && (
+            <FormInput formData={formData} onChange={onChange} onBlur={onFieldBlur} label="LMV Issue Date" name="lmvIssueDate" placeholder="DD-MM-YYYY" />
+          )}
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-8">
+        <FormInput formData={formData} onChange={onChange} onBlur={onFieldBlur} label="Authority" name="issuingAuthority" placeholder="RLO DELHI" />
+        <div className="space-y-3">
+          <label className="block text-[10px] font-black uppercase tracking-[0.25em] text-slate-400 ml-1">Photo</label>
+          <div className="relative">
+            <input type="file" accept="image/*" onChange={onPhoto} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
+            <div className="w-full bg-slate-50/50 border border-slate-100 rounded-2xl px-6 py-5 font-bold text-center text-slate-400 hover:bg-white transition-all text-sm truncate">
+              {photo ? 'Photo Uploaded' : 'Upload Photo'}
+            </div>
+          </div>
+        </div>
+        <div className="space-y-3 col-span-2">
+          <label className="block text-[10px] font-black uppercase tracking-[0.25em] text-slate-400 ml-1">Signature</label>
+          <div className="relative">
+            <input type="file" accept="image/*" onChange={onSign} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
+            <div className="w-full bg-slate-50/50 border border-slate-100 rounded-2xl px-6 py-5 font-bold text-center text-slate-400 hover:bg-white transition-all text-sm truncate">
+              {signature ? 'Signature Uploaded' : 'Upload Signature'}
+            </div>
           </div>
         </div>
       </div>
