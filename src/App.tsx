@@ -155,12 +155,14 @@ const SPEC_GRID_X_NUDGE_IN = -0.028;
 const SPEC_GRID_Y_NUDGE_IN = 0.018;
 /** Shift value text down vs grey mockup labels (card inches). */
 const MAIN_VALUE_Y_NUDGE_IN = 0.017;
-/** QR plate ~4.5% smaller, centered in prior box. */
-const QR_LAYOUT_BASE = { x: 0.0553, y: 1.0935, w: 0.9894, h: 0.905 } as const;
-/** QR render scale: anchored bottom-left, grows to top-right. */
-const QR_SCALE = 1.03;
 /** QR block slight right nudge on card (inches). */
 const QR_X_NUDGE_IN = 2 / 25.4;
+/** QR block slight upward nudge on card (inches). Shifted 1.5mm upwards. */
+const QR_Y_NUDGE_IN = -1.5 / 25.4;
+/** QR plate ~4.5% smaller, centered in prior box. */
+const QR_LAYOUT_BASE = { x: 0.0553, y: 1.0935 + QR_Y_NUDGE_IN, w: 0.9894, h: 0.905 } as const;
+/** QR render scale: anchored bottom-left, grows to top-right. */
+const QR_SCALE = 1.03;
 /** Shift left-aligned values ~2mm to the right to avoid overlapping labels (2mm = 0.078 inches) */
 const LEFT_VALUES_X_SHIFT_IN = 0.078;
 /** Shift left-aligned values ~1.5mm down (1.5mm = 0.059 inches) */
@@ -170,7 +172,7 @@ const DEFAULT_TEMPLATE_LAYOUT: Record<string, Partial<{ x: number; y: number; w:
   regdOwner: { x: 0.5807, y: 0.152, fontSize: 5 },
   swdOf: { x: 0.5719, y: 0.244, fontSize: 5 },
   regnDate: { x: 0.58, y: 0.4264, fontSize: 5 },
-  colour: { x: 0.5788, y: 0.5211, fontSize: 5 },
+  colour: { x: 0.5788, y: 0.4908, fontSize: 5 },
   fuel: { x: 0.5789, y: 0.5676, fontSize: 5 },
   vehicleClass: { x: 0.5858, y: 0.6374, fontSize: 5 },
   bodyType: { x: 0.5839, y: 0.7158, fontSize: 5 },
@@ -178,7 +180,7 @@ const DEFAULT_TEMPLATE_LAYOUT: Record<string, Partial<{ x: number; y: number; w:
   chassisNo: { x: 0.5914, y: 0.854, fontSize: 5 },
   engineNo: { x: 0.5914, y: 0.9427, fontSize: 5 },
   modelNo: { x: 0.5914, y: 1.0194, fontSize: 5 },
-  manufacturingDt: { x: 1.9124, y: 0.4081, fontSize: 5 },
+  manufacturingDt: { x: 1.9244, y: 0.4081, fontSize: 5 },
   seatCapacity: { x: 1.7591, y: 1.314, fontSize: 5 },
   standCapacity: { x: 1.761, y: 1.4024, fontSize: 5 },
   noOfCyc: { x: 2.372, y: 1.326, fontSize: 5 },
@@ -188,10 +190,10 @@ const DEFAULT_TEMPLATE_LAYOUT: Record<string, Partial<{ x: number; y: number; w:
   wheelBase: { x: 3.0106, y: 1.3509, w: 0.2549, h: 0.0872, fontSize: 5 },
   rlw: { x: 3.007, y: 1.4306, w: 0.3271, h: 0.0992, fontSize: 5 },
   hypothecatedTo: { x: 1.7503, y: 1.1507, w: 0.822, h: 0.135, fontSize: 5 },
-  address: { x: 1.4946, y: 1.5839, fontSize: 5 },
-  issuingAuthority: { x: 1.4993, y: 1.9423, fontSize: 5 },
-  qrCode: { x: 0.1088, y: 1.125, w: 1.0336, h: 1.0337 },
-  regdValidity: { x: 2.8719, y: 0.4072, w: 0.4397, h: 0.132, fontSize: 5 },
+  address: { x: 1.4946, y: 1.602, fontSize: 5 },
+  issuingAuthority: { x: 1.4993, y: 1.9363, fontSize: 5 },
+  qrCode: { x: 0.1088, y: 1.125 + QR_Y_NUDGE_IN, w: 1.0336, h: 1.0337 },
+  regdValidity: { x: 2.89, y: 0.4012, w: 0.4397, h: 0.132, fontSize: 5 },
   signature: { x: 2.6655, y: 1.9129, w: 0.8, h: 0.12 },
 };
 
@@ -1289,7 +1291,7 @@ function CardPreview({
     { key: 'ownerSerial',     dx: 2.2848 + SPEC_GRID_X_NUDGE_IN, dy: 1.3873 + SPEC_GRID_Y_NUDGE_IN, dw: 0.35, dh: 0.09, dSize: 6.5,              value: data.ownerSerial },
     { key: 'address',         dx: 1.443, dy: 1.5462, dw: 1.5004, dh: 0.2191, dSize: 6,                value: data.address },
     { key: 'issuingAuthority',dx: 1.7278, dy: 1.88 + AUTHORITY_Y_EXTRA_IN, dw: 0.7612, dh: 0.103, dSize: 7,   bold: true,  value: data.issuingAuthority },
-    { key: 'qrCode',          dx: 0.0734 + QR_X_NUDGE_IN, dy: 1.0935, dw: 0.9954 * QR_SCALE, dh: 1.0013 * QR_SCALE, dSize: 0,   isQR: true,  value: '' },
+    { key: 'qrCode',          dx: 0.0734 + QR_X_NUDGE_IN, dy: 1.0935 + QR_Y_NUDGE_IN, dw: 0.9954 * QR_SCALE, dh: 1.0013 * QR_SCALE, dSize: 0,   isQR: true,  value: '' },
     { key: 'signature',       dx: 2.6447, dy: 1.8643, dw: 0.8, dh: 0.12, dSize: 0,   isSig: true, value: '' },
   ];
 
