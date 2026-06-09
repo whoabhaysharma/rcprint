@@ -161,38 +161,38 @@ const QR_LAYOUT_BASE = { x: 0.0553, y: 1.0935, w: 0.9894, h: 0.905 } as const;
 const QR_SCALE = 1.03;
 /** QR block slight right nudge on card (inches). */
 const QR_X_NUDGE_IN = 2 / 25.4;
+/** Shift left-aligned values ~2mm to the right to avoid overlapping labels (2mm = 0.078 inches) */
+const LEFT_VALUES_X_SHIFT_IN = 0.078;
+/** Shift left-aligned values ~1.5mm down (1.5mm = 0.059 inches) */
+const LEFT_VALUES_Y_SHIFT_IN = 0.059;
 const DEFAULT_TEMPLATE_LAYOUT: Record<string, Partial<{ x: number; y: number; w: number; h: number; fontSize: number; bold: boolean }>> = {
-  regnNo: { x: 0.5537, y: 0.0421 + MAIN_VALUE_Y_NUDGE_IN, w: 0.8292, h: 0.1301, fontSize: 5 },
-  regdOwner: { x: 0.5523, y: 0.1265 + MAIN_VALUE_Y_NUDGE_IN, fontSize: 5 },
-  swdOf: { x: 0.5513, y: 0.2097 + MAIN_VALUE_Y_NUDGE_IN, fontSize: 5 },
-  regnDate: { x: 0.5634, y: 0.3759 + MAIN_VALUE_Y_NUDGE_IN, fontSize: 5 },
-  colour: { x: 0.5633, y: 0.4547 + MAIN_VALUE_Y_NUDGE_IN, fontSize: 5 },
-  fuel: { x: 0.5634, y: 0.5263 + MAIN_VALUE_Y_NUDGE_IN, fontSize: 5 },
-  vehicleClass: { x: 0.5634, y: 0.5961 + MAIN_VALUE_Y_NUDGE_IN, fontSize: 5 },
-  bodyType: { x: 0.5634, y: 0.6676 + MAIN_VALUE_Y_NUDGE_IN, fontSize: 5 },
-  manufacturer: { x: 0.5634, y: 0.7374 + MAIN_VALUE_Y_NUDGE_IN, fontSize: 5 },
-  chassisNo: { x: 0.5634, y: 0.818 + MAIN_VALUE_Y_NUDGE_IN, fontSize: 5 },
-  engineNo: { x: 0.5634, y: 0.8967 + MAIN_VALUE_Y_NUDGE_IN, fontSize: 5 },
-  modelNo: { x: 0.5634, y: 0.9784 + MAIN_VALUE_Y_NUDGE_IN, fontSize: 5 },
-  manufacturingDt: { x: 1.8724 + MFG_VALIDITY_X_NUDGE_IN, y: 0.3911 + MFG_VALIDITY_Y_NUDGE_IN, fontSize: 5 },
-  seatCapacity: { x: 1.7091 + SPEC_GRID_X_NUDGE_IN, y: 1.2926 + SPEC_GRID_Y_NUDGE_IN, fontSize: 5 },
-  standCapacity: { x: 1.711 + SPEC_GRID_X_NUDGE_IN, y: 1.3601 + SPEC_GRID_Y_NUDGE_IN, fontSize: 5 },
-  noOfCyc: { x: 2.322 + SPEC_GRID_X_NUDGE_IN, y: 1.2837 + SPEC_GRID_Y_NUDGE_IN, fontSize: 5 },
-  ownerSerial: { x: 2.3209 + SPEC_GRID_X_NUDGE_IN, y: 1.3632 + SPEC_GRID_Y_NUDGE_IN, fontSize: 5 },
-  unladenWt: { x: 2.9477 + SPEC_GRID_X_NUDGE_IN, y: 1.1292 + SPEC_GRID_Y_NUDGE_IN, w: 0.3081, h: 0.0841, fontSize: 5 },
-  cubicCapacity: { x: 2.9473 + SPEC_GRID_X_NUDGE_IN, y: 1.2083 + SPEC_GRID_Y_NUDGE_IN, w: 0.2904, h: 0.0843, fontSize: 5 },
-  wheelBase: { x: 2.9467 + SPEC_GRID_X_NUDGE_IN, y: 1.2878 + SPEC_GRID_Y_NUDGE_IN, w: 0.2549, h: 0.0872, fontSize: 5 },
-  rlw: { x: 2.9501 + SPEC_GRID_X_NUDGE_IN, y: 1.3733 + SPEC_GRID_Y_NUDGE_IN, w: 0.3271, h: 0.0992, fontSize: 5 },
-  hypothecatedTo: { x: 1.6964, y: 1.1218, w: 0.9, h: 0.135, fontSize: 5 },
-  address: { x: 1.4731, y: 1.5582, fontSize: 5 },
-  issuingAuthority: { x: 1.463, y: 1.868 + AUTHORITY_Y_EXTRA_IN, fontSize: 5 },
-  qrCode: {
-    x: QR_LAYOUT_BASE.x + QR_X_NUDGE_IN,
-    y: QR_LAYOUT_BASE.y,
-    w: QR_LAYOUT_BASE.w * QR_SCALE,
-    h: QR_LAYOUT_BASE.h * QR_SCALE,
-  },
-  regdValidity: { x: 2.9304 + MFG_VALIDITY_X_NUDGE_IN, y: 0.3701 + MFG_VALIDITY_Y_NUDGE_IN + REGD_VALIDITY_Y_EXTRA_IN, w: 0.4397, h: 0.132, fontSize: 5 },
+  regnNo: { x: 0.5831, y: 0.0709, w: 0.8292, h: 0.1301, fontSize: 5 },
+  regdOwner: { x: 0.5807, y: 0.152, fontSize: 5 },
+  swdOf: { x: 0.5719, y: 0.244, fontSize: 5 },
+  regnDate: { x: 0.58, y: 0.4264, fontSize: 5 },
+  colour: { x: 0.5788, y: 0.5211, fontSize: 5 },
+  fuel: { x: 0.5789, y: 0.5676, fontSize: 5 },
+  vehicleClass: { x: 0.5858, y: 0.6374, fontSize: 5 },
+  bodyType: { x: 0.5839, y: 0.7158, fontSize: 5 },
+  manufacturer: { x: 0.5914, y: 0.7834, fontSize: 5 },
+  chassisNo: { x: 0.5914, y: 0.854, fontSize: 5 },
+  engineNo: { x: 0.5914, y: 0.9427, fontSize: 5 },
+  modelNo: { x: 0.5914, y: 1.0194, fontSize: 5 },
+  manufacturingDt: { x: 1.9124, y: 0.4081, fontSize: 5 },
+  seatCapacity: { x: 1.7591, y: 1.314, fontSize: 5 },
+  standCapacity: { x: 1.761, y: 1.4024, fontSize: 5 },
+  noOfCyc: { x: 2.372, y: 1.326, fontSize: 5 },
+  ownerSerial: { x: 2.3709, y: 1.4085, fontSize: 5 },
+  unladenWt: { x: 3.0046, y: 1.1784, w: 0.3081, h: 0.0841, fontSize: 5 },
+  cubicCapacity: { x: 3.0112, y: 1.2714, w: 0.2904, h: 0.0843, fontSize: 5 },
+  wheelBase: { x: 3.0106, y: 1.3509, w: 0.2549, h: 0.0872, fontSize: 5 },
+  rlw: { x: 3.007, y: 1.4306, w: 0.3271, h: 0.0992, fontSize: 5 },
+  hypothecatedTo: { x: 1.7503, y: 1.1507, w: 0.822, h: 0.135, fontSize: 5 },
+  address: { x: 1.4946, y: 1.5839, fontSize: 5 },
+  issuingAuthority: { x: 1.4993, y: 1.9423, fontSize: 5 },
+  qrCode: { x: 0.1088, y: 1.125, w: 1.0336, h: 1.0337 },
+  regdValidity: { x: 2.8719, y: 0.4072, w: 0.4397, h: 0.132, fontSize: 5 },
+  signature: { x: 2.6655, y: 1.9129, w: 0.8, h: 0.12 },
 };
 
 /** Preview / print: wrap hypothecation into lines for the card overlay (display-only). */
@@ -1264,18 +1264,18 @@ function CardPreview({
   type FieldDef = { key: string; value: string; bold?: boolean; isQR?: boolean; isSig?: boolean;
                     dx: number; dy: number; dw: number; dh: number; dSize: number };
   const FDEFS: FieldDef[] = [
-    { key: 'regnNo',          dx: 0.5704, dy: 0.0474 + MAIN_VALUE_Y_NUDGE_IN, dw: 1.1, dh: 0.1, dSize: 8,   bold: true,  value: data.regnNo },
-    { key: 'regdOwner',       dx: 0.5704, dy: 0.1445 + MAIN_VALUE_Y_NUDGE_IN, dw: 1.0793, dh: 0.0911, dSize: 7,   bold: true,  value: data.regdOwner },
-    { key: 'swdOf',           dx: 0.5694, dy: 0.2337 + MAIN_VALUE_Y_NUDGE_IN, dw: 1.0498, dh: 0.0793, dSize: 7,                value: data.swdOf },
-    { key: 'regnDate',        dx: 0.5694, dy: 0.4181 + MAIN_VALUE_Y_NUDGE_IN, dw: 0.8793, dh: 0.0752, dSize: 6.5,              value: data.regnDate },
-    { key: 'colour',          dx: 0.5694, dy: 0.4908 + MAIN_VALUE_Y_NUDGE_IN, dw: 0.8321, dh: 0.0723, dSize: 6.5,              value: data.colour },
-    { key: 'fuel',            dx: 0.5694, dy: 0.5624 + MAIN_VALUE_Y_NUDGE_IN, dw: 0.8793, dh: 0.0722, dSize: 6.5,              value: data.fuel },
-    { key: 'vehicleClass',    dx: 0.5694, dy: 0.6322 + MAIN_VALUE_Y_NUDGE_IN, dw: 0.8616, dh: 0.0752, dSize: 6.5,              value: data.vehicleClass },
-    { key: 'bodyType',        dx: 0.5694, dy: 0.7097 + MAIN_VALUE_Y_NUDGE_IN, dw: 0.8645, dh: 0.0723, dSize: 6.5,              value: data.bodyType },
-    { key: 'manufacturer',    dx: 0.5694, dy: 0.7795 + MAIN_VALUE_Y_NUDGE_IN, dw: 1.2937, dh: 0.0752, dSize: 6,                value: data.manufacturer },
-    { key: 'chassisNo',       dx: 0.5694, dy: 0.8481 + MAIN_VALUE_Y_NUDGE_IN, dw: 1.3262, dh: 0.0811, dSize: 6.5,              value: data.chassisNo },
-    { key: 'engineNo',        dx: 0.5694, dy: 0.9268 + MAIN_VALUE_Y_NUDGE_IN, dw: 1.3173, dh: 0.0752, dSize: 6.5,              value: data.engineNo },
-    { key: 'modelNo',         dx: 0.5694, dy: 1.0025 + MAIN_VALUE_Y_NUDGE_IN, dw: 1.3646, dh: 0.0782, dSize: 6,   bold: true,  value: data.modelNo },
+    { key: 'regnNo',          dx: 0.5704 + LEFT_VALUES_X_SHIFT_IN, dy: 0.0474 + MAIN_VALUE_Y_NUDGE_IN + LEFT_VALUES_Y_SHIFT_IN, dw: 1.1, dh: 0.1, dSize: 8,   bold: true,  value: data.regnNo },
+    { key: 'regdOwner',       dx: 0.5704 + LEFT_VALUES_X_SHIFT_IN, dy: 0.1445 + MAIN_VALUE_Y_NUDGE_IN + LEFT_VALUES_Y_SHIFT_IN, dw: 1.0793, dh: 0.0911, dSize: 7,   bold: true,  value: data.regdOwner },
+    { key: 'swdOf',           dx: 0.5694 + LEFT_VALUES_X_SHIFT_IN, dy: 0.2337 + MAIN_VALUE_Y_NUDGE_IN + LEFT_VALUES_Y_SHIFT_IN, dw: 1.0498, dh: 0.0793, dSize: 7,                value: data.swdOf },
+    { key: 'regnDate',        dx: 0.5694 + LEFT_VALUES_X_SHIFT_IN, dy: 0.4181 + MAIN_VALUE_Y_NUDGE_IN + LEFT_VALUES_Y_SHIFT_IN, dw: 0.8793, dh: 0.0752, dSize: 6.5,              value: data.regnDate },
+    { key: 'colour',          dx: 0.5694 + LEFT_VALUES_X_SHIFT_IN, dy: 0.4908 + MAIN_VALUE_Y_NUDGE_IN + LEFT_VALUES_Y_SHIFT_IN, dw: 0.8321, dh: 0.0723, dSize: 6.5,              value: data.colour },
+    { key: 'fuel',            dx: 0.5694 + LEFT_VALUES_X_SHIFT_IN, dy: 0.5624 + MAIN_VALUE_Y_NUDGE_IN + LEFT_VALUES_Y_SHIFT_IN, dw: 0.8793, dh: 0.0722, dSize: 6.5,              value: data.fuel },
+    { key: 'vehicleClass',    dx: 0.5694 + LEFT_VALUES_X_SHIFT_IN, dy: 0.6322 + MAIN_VALUE_Y_NUDGE_IN + LEFT_VALUES_Y_SHIFT_IN, dw: 0.8616, dh: 0.0752, dSize: 6.5,              value: data.vehicleClass },
+    { key: 'bodyType',        dx: 0.5694 + LEFT_VALUES_X_SHIFT_IN, dy: 0.7097 + MAIN_VALUE_Y_NUDGE_IN + LEFT_VALUES_Y_SHIFT_IN, dw: 0.8645, dh: 0.0723, dSize: 6.5,              value: data.bodyType },
+    { key: 'manufacturer',    dx: 0.5694 + LEFT_VALUES_X_SHIFT_IN, dy: 0.7795 + MAIN_VALUE_Y_NUDGE_IN + LEFT_VALUES_Y_SHIFT_IN, dw: 1.2937, dh: 0.0752, dSize: 6,                value: data.manufacturer },
+    { key: 'chassisNo',       dx: 0.5694 + LEFT_VALUES_X_SHIFT_IN, dy: 0.8481 + MAIN_VALUE_Y_NUDGE_IN + LEFT_VALUES_Y_SHIFT_IN, dw: 1.3262, dh: 0.0811, dSize: 6.5,              value: data.chassisNo },
+    { key: 'engineNo',        dx: 0.5694 + LEFT_VALUES_X_SHIFT_IN, dy: 0.9268 + MAIN_VALUE_Y_NUDGE_IN + LEFT_VALUES_Y_SHIFT_IN, dw: 1.3173, dh: 0.0752, dSize: 6.5,              value: data.engineNo },
+    { key: 'modelNo',         dx: 0.5694 + LEFT_VALUES_X_SHIFT_IN, dy: 1.0025 + MAIN_VALUE_Y_NUDGE_IN + LEFT_VALUES_Y_SHIFT_IN, dw: 1.3646, dh: 0.0782, dSize: 6,   bold: true,  value: data.modelNo },
     { key: 'manufacturingDt', dx: 1.8363 + MFG_VALIDITY_X_NUDGE_IN, dy: 0.3972 + MFG_VALIDITY_Y_NUDGE_IN, dw: 0.4285, dh: 0.09, dSize: 6.5,              value: data.manufacturingDt },
     { key: 'regdValidity',    dx: 2.8797 + MFG_VALIDITY_X_NUDGE_IN, dy: 0.4002 + MFG_VALIDITY_Y_NUDGE_IN + REGD_VALIDITY_Y_EXTRA_IN, dw: 0.5962, dh: 0.0959, dSize: 6.5,              value: data.regdValidity },
     { key: 'hypothecatedTo',  dx: 1.6964, dy: 1.1218, dw: 0.9, dh: 0.135, dSize: 5,   bold: true,  value: hypothecatedValueForCard(String(data.hypothecatedTo || '')) },
@@ -1412,6 +1412,26 @@ function CardPreview({
             setFontSizingField(null);
           }}
         >
+          {/* Background reference scan image for calibration */}
+          {isLayoutEditing && (
+            <>
+              <div
+                className="absolute inset-0 pointer-events-none"
+                style={{
+                  backgroundImage: `url(/calibration-bg.png)`,
+                  backgroundSize: 'cover',
+                  backgroundPosition: 'center',
+                  backgroundRepeat: 'no-repeat',
+                  opacity: 0.5,
+                  mixBlendMode: 'multiply',
+                }}
+              />
+              <div
+                className="absolute inset-0 pointer-events-none bg-blue-600/[0.03] mix-blend-color"
+              />
+            </>
+          )}
+
           {resolved.map((f, i) => {
           const left = f.x * PREVIEW_PPI;
           const top  = f.y * PREVIEW_PPI;
