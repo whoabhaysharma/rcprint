@@ -224,7 +224,7 @@ const DEFAULT_TEMPLATE_LAYOUT: Record<string, Partial<{ x: number; y: number; w:
   hypothecatedTo: { x: 1.7503, y: 1.1507, w: 0.822, h: 0.135, fontSize: 5 },
   address: { x: 1.4946, y: 1.602, fontSize: 5 },
   issuingAuthority: { x: 1.4993, y: 1.9363, fontSize: 5 },
-  qrCode: { x: 0.1088, y: 1.125 + QR_Y_NUDGE_IN, w: 1.0336, h: 1.0337 },
+  qrCode: { x: 0.1088 + (0.5 / 25.4), y: 1.125 + QR_Y_NUDGE_IN + (0.5 / 25.4), w: 1.0336 - (1 / 25.4), h: 1.0337 - (1 / 25.4) },
   regdValidity: { x: 2.89, y: 0.4012, w: 0.4397, h: 0.132, fontSize: 5 },
   signature: { x: 2.6655, y: 1.9129, w: 0.8, h: 0.12 },
 };
@@ -1583,7 +1583,7 @@ function CardPreview({
     { key: 'ownerSerial',     dx: 2.2848 + SPEC_GRID_X_NUDGE_IN, dy: 1.3873 + SPEC_GRID_Y_NUDGE_IN, dw: 0.35, dh: 0.09, dSize: 6.5,              value: data.ownerSerial },
     { key: 'address',         dx: 1.443, dy: 1.5462, dw: 1.5004, dh: 0.2191, dSize: 6,                value: data.address },
     { key: 'issuingAuthority',dx: 1.7278, dy: 1.88 + AUTHORITY_Y_EXTRA_IN, dw: 0.7612, dh: 0.103, dSize: 7,   bold: true,  value: data.issuingAuthority },
-    { key: 'qrCode',          dx: 0.0734 + QR_X_NUDGE_IN, dy: 1.0935 + QR_Y_NUDGE_IN, dw: 0.9954 * QR_SCALE, dh: 1.0013 * QR_SCALE, dSize: 0,   isQR: true,  value: '' },
+    { key: 'qrCode',          dx: 0.0734 + QR_X_NUDGE_IN + (0.5 / 25.4), dy: 1.0935 + QR_Y_NUDGE_IN + (0.5 / 25.4), dw: 0.9954 * QR_SCALE - (1 / 25.4), dh: 1.0013 * QR_SCALE - (1 / 25.4), dSize: 0,   isQR: true,  value: '' },
     { key: 'signature',       dx: 2.6447, dy: 1.8643, dw: 0.8, dh: 0.12, dSize: 0,   isSig: true, value: '' },
   ];
 
